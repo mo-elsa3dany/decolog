@@ -1,0 +1,25 @@
+<svg width="260" height="54" viewBox="0 0 260 54" xmlns="http://www.w3.org/2000/svg">
+  <rect x="1" y="1" width="258" height="52" fill="#020305" stroke="#1f2937" stroke-width="1"/>
+
+  <!-- Top line -->
+  <text x="12" y="16" font-family="JetBrains Mono, monospace" font-size="10" fill="#9ca3af" letter-spacing="0.2em">
+    DCL
+  </text>
+  <rect x="48" y="7" width="2" height="12" fill="#00ff9c"/>
+  <text x="58" y="16" font-family="JetBrains Mono, monospace" font-size="10" fill="#9ca3af" letter-spacing="0.2em">
+    MODULE 01
+  </text>
+
+  <!-- Main title -->
+  <text x="12" y="36" font-family="JetBrains Mono, monospace" font-size="16" fill="#e5e7eb" letter-spacing="0.25em">
+    DECO
+  </text>
+  <text x="96" y="36" font-family="JetBrains Mono, monospace" font-size="16" fill="#00ff9c" letter-spacing="0.25em">
+    LOG
+  </text>
+
+  <!-- Subtitle -->
+  <text x="12" y="48" font-family="JetBrains Mono, monospace" font-size="8" fill="#6b7280" letter-spacing="0.18em">
+    OFFLINE DIVE LOG HUD
+  </text>
+</svg>

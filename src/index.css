@@ -1,0 +1,188 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #020305;
+  --panel: #05070a;
+  --border: #0f1722;
+  --accent: #00ff9c;
+  --accent-dim: #00ff9c33;
+  --text-main: #e6eaf0;
+  --text-dim: #6b7280;
+  --text-alert: #ff4444;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text-main);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Segoe UI", sans-serif;
+}
+
+.mil-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: inset 0 0 0 1px #000;
+}
+
+.mil-text {
+  color: var(--accent);
+  text-shadow: 0 0 8px #00ff9c22;
+}
+
+.mil-dim {
+  color: var(--text-dim);
+}
+
+.mil-scan {
+  position: relative;
+}
+
+.mil-scan::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.02) 0px,
+    rgba(255, 255, 255, 0.02) 1px,
+    transparent 2px,
+    transparent 4px
+  );
+  mix-blend-mode: overlay;
+}
+
+/* Buttons & inputs still get Tailwind classes; this polishes defaults */
+
+button {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
+  letter-spacing: 0.12em;
+  border-radius: 2px;
+}
+
+input,
+select {
+  background: black;
+  color: var(--text-main);
+  border: 1px solid var(--border);
+}
+
+input::placeholder {
+  color: #374151;
+}
+
+nav button {
+  transition: all 0.15s ease;
+}
+
+nav button:hover {
+  background: #020305;
+}
+
+* {
+  box-sizing: border-box;
+}
+/* === MIL HUD UI POLISH === */
+
+.mil-panel {
+  background: #0b0d0e;
+  box-shadow:
+    inset 0 0 0 1px rgba(0,255,180,0.12),
+    0 0 18px rgba(0,255,180,0.03);
+}
+
+.mil-text {
+  color: #7affc7;
+  text-shadow: 0 0 6px rgba(122,255,199,0.25);
+}
+
+.mil-dim {
+  color: #707d76;
+}
+
+.mil-scan {
+  background-image:
+    repeating-linear-gradient(
+      to bottom,
+      rgba(0,255,180,0.03),
+      rgba(0,255,180,0.03) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+}
+/* ===== GLOBAL MOBILE LAYOUT ===== */
+
+@media (max-width: 768px) {
+  body {
+    font-size: 13px;
+  }
+
+  main {
+    padding-bottom: 4.5rem;
+  }
+
+  header,
+  nav {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  .mil-panel {
+    padding: 0.75rem;
+  }
+
+  .font-mono {
+    font-size: 12px;
+  }
+}
+/* ===== MORE TAB LAYOUT ===== */
+
+.more-shell {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem; /* bigger vertical gap between panels */
+}
+
+.more-header-line {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: #00ff9c;
+  margin-left: 0.25rem;
+}
+
+.export-keys {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.export-key-btn {
+  width: 210px;          /* “key” width on desktop */
+  max-width: 100%;
+}
+
+/* mobile fine-tune for MORE tab */
+@media (max-width: 768px) {
+  .more-shell {
+    gap: 1.75rem;
+  }
+
+  .more-header-line {
+    font-size: 11px;
+    margin-left: 0.1rem;
+  }
+
+  .export-key-btn {
+    width: 100%;         /* full-width, finger friendly on phones */
+  }
+}

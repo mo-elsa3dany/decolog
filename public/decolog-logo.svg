@@ -1,0 +1,45 @@
+<svg width="260" height="54" viewBox="0 0 260 54" xmlns="http://www.w3.org/2000/svg">
+  <!-- Plate background with visible rounded border -->
+<rect x="1" y="1" width="258" height="52" rx="6" ry="6"
+      fill="#030508" stroke="#4b5563" stroke-width="2"/>
+<rect x="4" y="4" width="252" height="46" rx="4" ry="4"
+      fill="none" stroke="#1f2937" stroke-width="1"/>
+
+  <!-- Top line: DCL | MODULE 01 -->
+  <text x="14" y="16"
+        font-family="JetBrains Mono, ui-monospace, monospace"
+        font-size="10"
+        fill="#9ca3af"
+        letter-spacing="0.2em">
+    DCL
+  </text>
+
+  <!-- vertical green bar instead of // -->
+  <rect x="54" y="7" width="2" height="12" fill="#00ff9c"/>
+
+  <text x="64" y="16"
+        font-family="JetBrains Mono, ui-monospace, monospace"
+        font-size="10"
+        fill="#9ca3af"
+        letter-spacing="0.2em">
+    MODULE 01
+  </text>
+
+  <!-- Main title: DECOLOG with LOG in green, tight spacing -->
+  <text x="14" y="34"
+        font-family="JetBrains Mono, ui-monospace, monospace"
+        font-size="16"
+        fill="#e5e7eb"
+        letter-spacing="0.18em">
+    DECO<tspan fill="#00ff9c">LOG</tspan>
+  </text>
+
+  <!-- Subtitle -->
+  <text x="14" y="48"
+        font-family="JetBrains Mono, ui-monospace, monospace"
+        font-size="8"
+        fill="#6b7280"
+        letter-spacing="0.18em">
+    OFFLINE DIVE LOG HUD
+  </text>
+</svg>
