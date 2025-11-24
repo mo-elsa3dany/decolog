@@ -1,3 +1,4 @@
+import type React from 'react';
 import { useEffect, useState } from 'react';
 import {
   seedIfEmpty,
@@ -8,6 +9,8 @@ import {
   isUnlocked,
   setUnlocked,
   type StoredDive,
+  getProfile,
+  saveProfile,
 } from './storage';
 
 type Tab = 'log' | 'stats' | 'more';
@@ -75,7 +78,6 @@ function cylLabel(liters: number, units: Units): string {
   return `${liters} L`;
 }
 
-// CSV cell escaping
 function csvCell(value: unknown): string {
   const s = String(value ?? '');
   if (s.includes('"') || s.includes(',') || s.includes('\n')) {
@@ -97,7 +99,7 @@ export default function App() {
   const [newTime, setNewTime] = useState('42');
   const [newStart, setNewStart] = useState('210');
   const [newEnd, setNewEnd] = useState('70');
-  const [newCyl, setNewCyl] = useState('11.1'); // AL80
+  const [newCyl, setNewCyl] = useState('11.1');
 
   const [gasMode, setGasMode] = useState<GasMode>('AIR');
   const [o2Percent, setO2Percent] = useState('21');
@@ -114,6 +116,12 @@ export default function App() {
     return 'metric';
   });
 
+  // Diver profile state
+  const [profName, setProfName] = useState('');
+  const [profAgency, setProfAgency] = useState('');
+  const [profLevel, setProfLevel] = useState('');
+  const [profCylinder, setProfCylinder] = useState('AL80');
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem('decolog.units', units);
@@ -126,6 +134,15 @@ export default function App() {
       list.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
       setDives(list);
       setUnlockedState(isUnlocked());
+
+      const p = await getProfile();
+      if (p) {
+        setProfName(p.name ?? '');
+        setProfAgency(p.agency ?? '');
+        setProfLevel(p.level ?? '');
+        setProfCylinder(p.defaultCylinder ?? 'AL80');
+      }
+
       setLoading(false);
     })();
   }, []);
@@ -283,6 +300,12 @@ export default function App() {
       schema: 'decolog.v1',
       exportedAt: new Date().toISOString(),
       unitsPreference: units,
+      profile: {
+        name: profName,
+        agency: profAgency,
+        level: profLevel,
+        defaultCylinder: profCylinder,
+      },
       dives,
     };
     const json = JSON.stringify(payload, null, 2);
@@ -322,6 +345,9 @@ export default function App() {
     const lines = [
       '# DECOLOG - OFFLINE DIVE LOG HUD',
       `# export: ${dateStr}`,
+      `# diver: ${profName || ''}`,
+      `# agency: ${profAgency || ''}`,
+      `# level: ${profLevel || ''}`,
       header.join(','),
       ...dives.map((d, index) =>
         [
@@ -335,7 +361,7 @@ export default function App() {
           d.endPressure,
           d.cylLiters,
           d.sac,
-        ].map(csvCell).join(',')
+        ].map(csvCell).join(','),
       ),
     ];
 
@@ -386,7 +412,18 @@ export default function App() {
       doc.text(`Dives: ${dives.length}`, 14, 42);
       doc.text(`Exported: ${dateStr}`, 14, 48);
 
-      let y = 60;
+      if (profName) {
+        doc.text(`Diver: ${profName}`, 14, 54);
+      }
+      if (profAgency || profLevel) {
+        doc.text(
+          `Profile: ${profAgency || ''} ${profLevel ? ' / ' + profLevel : ''}`,
+          14,
+          60,
+        );
+      }
+
+      let y = profName || profAgency || profLevel ? 72 : 60;
       const lineHeight = 6;
 
       doc.setFontSize(9);
@@ -427,6 +464,16 @@ export default function App() {
       console.error(err);
       alert('PDF export module not available. Make sure "npm install jspdf" ran OK.');
     }
+  }
+
+  async function handleProfileSave() {
+    await saveProfile({
+      name: profName,
+      agency: profAgency,
+      level: profLevel,
+      defaultCylinder: profCylinder,
+    });
+    alert('PROFILE SAVED');
   }
 
   const totalDives = dives.length;
@@ -527,6 +574,15 @@ export default function App() {
               onExportJson={handleExportJson}
               onExportCsv={handleExportCsv}
               onExportPdf={handleExportPdf}
+              profName={profName}
+              profAgency={profAgency}
+              profLevel={profLevel}
+              profCylinder={profCylinder}
+              setProfName={setProfName}
+              setProfAgency={setProfAgency}
+              setProfLevel={setProfLevel}
+              setProfCylinder={setProfCylinder}
+              onProfileSave={handleProfileSave}
             />
           )}
         </main>
@@ -1022,19 +1078,105 @@ function MoreView({
   onExportJson,
   onExportCsv,
   onExportPdf,
+  profName,
+  profAgency,
+  profLevel,
+  profCylinder,
+  setProfName,
+  setProfAgency,
+  setProfLevel,
+  setProfCylinder,
+  onProfileSave,
 }: {
   unlocked: boolean;
   onUnlock: () => void;
   onExportJson: () => void;
   onExportCsv: () => void;
   onExportPdf: () => void;
+  profName: string;
+  profAgency: string;
+  profLevel: string;
+  profCylinder: string;
+  setProfName: (v: string) => void;
+  setProfAgency: (v: string) => void;
+  setProfLevel: (v: string) => void;
+  setProfCylinder: (v: string) => void;
+  onProfileSave: () => void;
 }) {
   return (
-    <section className="more-shell">
+    <section className="more-shell space-y-3">
       <div className="more-header-line">
         CONTROL / MORE MODULES
       </div>
 
+      {/* Diver Profile Module */}
+      <div className="mil-panel rounded-lg p-3">
+        <div className="text-[10px] font-mono tracking-[0.25em] mil-dim uppercase mb-2">
+          DIVER MODULE
+        </div>
+
+        <div className="space-y-2">
+          <div>
+            <div className="text-[10px] font-mono mil-dim uppercase mb-1">
+              Name
+            </div>
+            <input
+              className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
+              value={profName}
+              onChange={(e) => setProfName(e.target.value)}
+              placeholder="Diver Name"
+            />
+          </div>
+
+          <div>
+            <div className="text-[10px] font-mono mil-dim uppercase mb-1">
+              Agency
+            </div>
+            <input
+              className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
+              value={profAgency}
+              onChange={(e) => setProfAgency(e.target.value)}
+              placeholder="PADI / TDI / GUE"
+            />
+          </div>
+
+          <div>
+            <div className="text-[10px] font-mono mil-dim uppercase mb-1">
+              Level
+            </div>
+            <input
+              className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
+              value={profLevel}
+              onChange={(e) => setProfLevel(e.target.value)}
+              placeholder="AOW / TEC / CAVE"
+            />
+          </div>
+
+          <div>
+            <div className="text-[10px] font-mono mil-dim uppercase mb-1">
+              Default Cylinder
+            </div>
+            <input
+              className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
+              value={profCylinder}
+              onChange={(e) => setProfCylinder(e.target.value)}
+              placeholder="AL80 / HP100"
+            />
+          </div>
+
+          <div className="flex justify-end pt-1">
+            <button
+              className="border border-emerald-500 text-emerald-300 px-3 py-1 font-mono text-[11px] tracking-[0.12em]"
+              type="button"
+              onClick={onProfileSave}
+            >
+              SAVE PROFILE
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* System module */}
       <div className="mil-panel rounded-lg p-3">
         <div className="text-[10px] font-mono tracking-[0.25em] mil-dim uppercase mb-2">
           SYSTEM MODULE
@@ -1048,10 +1190,11 @@ function MoreView({
           <div className="text-right text-zinc-500">PENDING</div>
 
           <div className="mil-dim">BUILD</div>
-          <div className="text-right text-zinc-500">LOCAL DEV</div>
+          <div className="text-right text-zinc-500">VERCEL</div>
         </div>
       </div>
 
+      {/* License module */}
       <div className="mil-panel rounded-lg p-3">
         <div className="text-[10px] font-mono tracking-[0.25em] mil-dim uppercase mb-2">
           LICENSE MODULE
@@ -1075,6 +1218,7 @@ function MoreView({
         )}
       </div>
 
+      {/* Export module */}
       <div className="mil-panel rounded-lg p-3">
         <div className="text-[10px] font-mono tracking-[0.25em] mil-dim uppercase mb-2">
           EXPORT MODULE
