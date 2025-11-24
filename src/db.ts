@@ -1,42 +1,61 @@
 import Dexie, { type Table } from 'dexie';
 
+export type GasKind = 'AIR' | 'EAN32';
+
 export interface DiveRecord {
   id?: number;
+  date: string;
   site: string;
-  depth: number;
-  time: number;
-  startPressure: number;
-  endPressure: number;
-  cylLiters: number;
-  sac: number;
-  gas: string;
-  createdAt: string;
+  location?: string;
+  depthMeters: number;
+  bottomTimeMin: number;
+  gas: GasKind;
+  sacLpm?: number;
+  startBar?: number;
+  endBar?: number;
+  cylinderLiters?: number;
+  notes?: string;
+  createdAt: number;
+  updatedAt?: number;
 }
 
 export interface DiverProfile {
-  id: number;
-  name: string;
+  id?: number;
+  fullName: string;
   agency: string;
-  level: string;
-  defaultCylinder: string;
+  certLevel: string;
+  certNumber: string;
+  country: string;
+  email: string;
+  emergencyContactName: string;
+  emergencyContactPhone: string;
+  emergencyNotes: string;
+  notes: string;
+  updatedAt: number;
+}
+
+export interface SupportMessage {
+  id?: number;
+  subject: string;
+  message: string;
+  includeDevice: boolean;
+  deviceInfo?: string;
+  createdAt: number;
+  sent: boolean;
 }
 
 class DecoLogDB extends Dexie {
   dives!: Table<DiveRecord, number>;
   profile!: Table<DiverProfile, number>;
+  support!: Table<SupportMessage, number>;
 
   constructor() {
     super('DecoLogDB');
 
-    // Initial schema (dives only)
     this.version(1).stores({
-      dives: '++id,createdAt,site',
-    });
-
-    // Schema v2: add profile table
-    this.version(2).stores({
-      dives: '++id,createdAt,site',
+      dives: '++id, date, createdAt',
       profile: 'id',
+      support: '++id, createdAt, sent',
     });
   }
 }

@@ -13,7 +13,11 @@ export default defineConfig({
       },
       // We already have a manifest.webmanifest in public/, so we let it stand.
       // Workbox will precache all these file types from the production build:
+      minify: false,
       workbox: {
+        cleanupOutdatedCaches: true,
+        sourcemap: false,
+        mode: 'development',
         globPatterns: ['**/*.{js,css,html,svg,png,ico,webmanifest}'],
         navigateFallback: '/index.html',
       },

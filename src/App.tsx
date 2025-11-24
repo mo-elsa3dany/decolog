@@ -1,1252 +1,1276 @@
-import type React from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import jsPDF from 'jspdf';
 import {
   seedIfEmpty,
   getDives,
   addDive,
   updateDive,
   deleteDive,
-  isUnlocked,
-  setUnlocked,
   type StoredDive,
   getProfile,
   saveProfile,
+  saveSupportMessage,
+  type ProfileInput,
+  type SupportInput,
 } from './storage';
 
 type Tab = 'log' | 'stats' | 'more';
-type GasMode = 'AIR' | 'NITROX';
+type Gas = 'AIR' | 'EAN32';
 type Units = 'metric' | 'imperial';
-type CylinderProfileId = 'AL80' | 'HP100' | 'CUSTOM';
 
-const CYL_PROFILES: { id: CylinderProfileId; label: string; liters: number | null }[] = [
-  { id: 'AL80', label: 'AL80 (11.1 L)', liters: 11.1 },
-  { id: 'HP100', label: 'HP100 (13.2 L)', liters: 13.2 },
-  { id: 'CUSTOM', label: 'Custom', liters: null },
-];
+const FREE_LIMIT = 100;
 
-function resolveCylinderProfile(cylLiters: number): CylinderProfileId {
-  const diff = (a: number, b: number) => Math.abs(a - b);
-  if (diff(cylLiters, 11.1) < 0.3) return 'AL80';
-  if (diff(cylLiters, 13.2) < 0.3) return 'HP100';
-  return 'CUSTOM';
-}
-
-function computeMOD(o2Percent: number, ppO2: number, units: Units) {
-  if (!o2Percent || !ppO2) return '—';
-  const frac = o2Percent / 100;
-  if (frac <= 0) return '—';
-  const ata = ppO2 / frac;
-  const meters = (ata - 1) * 10;
-  if (meters <= 0) return '—';
-  if (units === 'imperial') {
-    const ft = meters * 3.28084;
-    return `${ft.toFixed(0)} ft`;
-  }
-  return `${meters.toFixed(0)} m`;
-}
-
+// ---------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------
 function depthLabel(depthMeters: number, units: Units): string {
+  if (!depthMeters) return units === 'imperial' ? '— ft' : '— m';
   if (units === 'imperial') {
     const ft = depthMeters * 3.28084;
     return `${ft.toFixed(0)} ft`;
   }
-  return `${depthMeters} m`;
+  return `${depthMeters.toFixed(0)} m`;
 }
 
 function sacLabel(sacLpm: number, units: Units): string {
   if (!sacLpm) return units === 'imperial' ? '— cu ft/min' : '— L/min';
+
   if (units === 'imperial') {
-    const cuft = sacLpm / 28.317;
+    const cuft = sacLpm / 28.317; // 1 cu ft ≈ 28.317 L
     return `${cuft.toFixed(2)} cu ft/min`;
   }
   return `${sacLpm.toFixed(1)} L/min`;
 }
 
-function pressureLabel(bar: number, units: Units): string {
+function pressureLabel(bar?: number, units: Units = 'metric'): string {
+  if (bar == null || bar <= 0) return units === 'imperial' ? '— psi' : '— bar';
   if (units === 'imperial') {
     const psi = bar * 14.5038;
     return `${psi.toFixed(0)} psi`;
   }
-  return `${bar} bar`;
+  return `${bar.toFixed(0)} bar`;
 }
 
-function cylLabel(liters: number, units: Units): string {
-  if (units === 'imperial') {
-    const cuft = liters / 28.317;
-    return `${cuft.toFixed(1)} cu ft equiv`;
+function formatMinutes(min: number): string {
+  if (!min || min <= 0) return '— min';
+  return `${min.toFixed(0)} min`;
+}
+
+function formatTotalMinutes(min: number): string {
+  if (!min || min <= 0) return '0 min';
+  const hours = Math.floor(min / 60);
+  const minutes = Math.round(min % 60);
+  if (hours <= 0) return `${minutes} min`;
+  return `${hours} h ${minutes} min`;
+}
+
+function isoToday(): string {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function niceDate(d: string): string {
+  if (!d) return '—';
+  try {
+    const obj = new Date(d);
+    if (Number.isNaN(obj.getTime())) return d;
+    return obj.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+    });
+  } catch {
+    return d;
   }
-  return `${liters} L`;
 }
 
-function csvCell(value: unknown): string {
-  const s = String(value ?? '');
-  if (s.includes('"') || s.includes(',') || s.includes('\n')) {
-    return `"${s.replace(/"/g, '""')}"`;
-  }
-  return s;
+// ---------------------------------------------------------------------
+// Types for the dive form & profile
+// ---------------------------------------------------------------------
+interface DiveFormState {
+  id?: number;
+  date: string;
+  site: string;
+  location: string;
+  depth: string; // meters as string
+  time: string; // minutes as string
+  gas: Gas;
+  startBar: string;
+  endBar: string;
+  cylinderLiters: string;
+  notes: string;
 }
 
+function emptyDiveForm(): DiveFormState {
+  return {
+    date: isoToday(),
+    site: '',
+    location: '',
+    depth: '',
+    time: '',
+    gas: 'AIR',
+    startBar: '',
+    endBar: '',
+    cylinderLiters: '11.1',
+    notes: '',
+  };
+}
+
+interface ProfileState {
+  fullName: string;
+  agency: string;
+  certLevel: string;
+  certNumber: string;
+  country: string;
+  email: string;
+  emergencyContactName: string;
+  emergencyContactPhone: string;
+  emergencyNotes: string;
+  notes: string;
+}
+
+function emptyProfile(): ProfileState {
+  return {
+    fullName: '',
+    agency: '',
+    certLevel: '',
+    certNumber: '',
+    country: '',
+    email: '',
+    emergencyContactName: '',
+    emergencyContactPhone: '',
+    emergencyNotes: '',
+    notes: '',
+  };
+}
+
+// ---------------------------------------------------------------------
+// Main App
+// ---------------------------------------------------------------------
 export default function App() {
   const [tab, setTab] = useState<Tab>('log');
   const [dives, setDives] = useState<StoredDive[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [isAdding, setIsAdding] = useState(false);
-  const [editId, setEditId] = useState<number | null>(null);
-
-  const [newSite, setNewSite] = useState('');
-  const [newDepth, setNewDepth] = useState('18');
-  const [newTime, setNewTime] = useState('42');
-  const [newStart, setNewStart] = useState('210');
-  const [newEnd, setNewEnd] = useState('70');
-  const [newCyl, setNewCyl] = useState('11.1');
-
-  const [gasMode, setGasMode] = useState<GasMode>('AIR');
-  const [o2Percent, setO2Percent] = useState('21');
-  const [ppO2Limit, setPpO2Limit] = useState('1.4');
-
-  const [cylProfile, setCylProfile] = useState<CylinderProfileId>('AL80');
-
-  const [unlocked, setUnlockedState] = useState(false);
-
   const [units, setUnits] = useState<Units>(() => {
     if (typeof window === 'undefined') return 'metric';
-    const saved = window.localStorage.getItem('decolog.units');
-    if (saved === 'metric' || saved === 'imperial') return saved;
-    return 'metric';
+    const stored = window.localStorage.getItem('decolog.units');
+    return stored === 'imperial' ? 'imperial' : 'metric';
   });
 
-  // Diver profile state
-  const [profName, setProfName] = useState('');
-  const [profAgency, setProfAgency] = useState('');
-  const [profLevel, setProfLevel] = useState('');
-  const [profCylinder, setProfCylinder] = useState('AL80');
+  const [isPro, setIsPro] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem('decolog.pro') === '1';
+  });
 
+  const [form, setForm] = useState<DiveFormState>(emptyDiveForm());
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [savingDive, setSavingDive] = useState(false);
+
+  const [profile, setProfile] = useState<ProfileState>(emptyProfile());
+  const [profileSaving, setProfileSaving] = useState(false);
+
+  const [supportSubject, setSupportSubject] = useState('');
+  const [supportMessage, setSupportMessage] = useState('');
+  const [supportIncludeDevice, setSupportIncludeDevice] = useState(true);
+  const [supportSaving, setSupportSaving] = useState(false);
+
+  // seed + load dives on first mount
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem('decolog.units', units);
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      await seedIfEmpty();
+      const list = await getDives();
+      if (!cancelled) {
+        // newest first
+        list.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+        setDives(list);
+        setLoading(false);
+      }
+    }
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // load profile
+  useEffect(() => {
+    let cancelled = false;
+    async function loadProfile() {
+      const stored = await getProfile();
+      if (!cancelled && stored) {
+        const mapped: ProfileState = {
+          fullName: stored.fullName,
+          agency: stored.agency,
+          certLevel: stored.certLevel,
+          certNumber: stored.certNumber,
+          country: stored.country,
+          email: stored.email,
+          emergencyContactName: stored.emergencyContactName,
+          emergencyContactPhone: stored.emergencyContactPhone,
+          emergencyNotes: stored.emergencyNotes,
+          notes: stored.notes,
+        };
+        setProfile(mapped);
+      }
+    }
+    loadProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // persist units + pro flag
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('decolog.units', units);
+    }
   }, [units]);
 
   useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const list = await seedIfEmpty();
-      list.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-      setDives(list);
-      setUnlockedState(isUnlocked());
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('decolog.pro', isPro ? '1' : '0');
+    }
+  }, [isPro]);
 
-      const p = await getProfile();
-      if (p) {
-        setProfName(p.name ?? '');
-        setProfAgency(p.agency ?? '');
-        setProfLevel(p.level ?? '');
-        setProfCylinder(p.defaultCylinder ?? 'AL80');
+  const canAddDive = isPro || dives.length < FREE_LIMIT;
+
+  // stats
+  const stats = useMemo(() => {
+    if (!dives.length) {
+      return {
+        count: 0,
+        totalMinutes: 0,
+        maxDepth: 0,
+        avgSac: 0,
+        divesByGas: { AIR: 0, EAN32: 0 } as Record<Gas, number>,
+      };
+    }
+
+    let totalMinutes = 0;
+    let maxDepth = 0;
+    let totalSac = 0;
+    let sacCount = 0;
+    const divesByGas: Record<Gas, number> = { AIR: 0, EAN32: 0 };
+
+    for (const d of dives) {
+      totalMinutes += d.bottomTimeMin || 0;
+      if (d.depthMeters > maxDepth) maxDepth = d.depthMeters;
+      if (d.sacLpm) {
+        totalSac += d.sacLpm;
+        sacCount += 1;
       }
+      if (d.gas === 'AIR' || d.gas === 'EAN32') {
+        divesByGas[d.gas] += 1;
+      }
+    }
 
-      setLoading(false);
-    })();
+    const avgSac = sacCount > 0 ? totalSac / sacCount : 0;
+
+    return {
+      count: dives.length,
+      totalMinutes,
+      maxDepth,
+      avgSac,
+      divesByGas,
+    };
+  }, [dives]);
+
+  const deviceInfo = useMemo(() => {
+    if (typeof navigator === 'undefined' || typeof window === 'undefined') {
+      return 'Unknown device';
+    }
+    const ua = navigator.userAgent;
+    const size = `${window.innerWidth}x${window.innerHeight}`;
+    return `${ua} | ${size}`;
   }, []);
 
-  async function reload() {
-    const list = await getDives();
-    list.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-    setDives(list);
+  // -------------------------------------------------------------------
+  // Dive form handlers
+  // -------------------------------------------------------------------
+  function handleFormChange<K extends keyof DiveFormState>(key: K, value: DiveFormState[K]) {
+    setForm((prev) => ({ ...prev, [key]: value }));
   }
 
-  function resetForm() {
-    setIsAdding(false);
-    setEditId(null);
-    setNewSite('');
-    setNewDepth('18');
-    setNewTime('42');
-    setNewStart('210');
-    setNewEnd('70');
-    setNewCyl('11.1');
-    setGasMode('AIR');
-    setO2Percent('21');
-    setPpO2Limit('1.4');
-    setCylProfile('AL80');
-  }
+  async function handleSaveDive() {
+    if (savingDive) return;
+    setSavingDive(true);
+    try {
+      const depth = Number(form.depth) || 0;
+      const time = Number(form.time) || 0;
+      const startP = Number(form.startBar) || 0;
+      const endP = Number(form.endBar) || 0;
+      const cyl = Number(form.cylinderLiters) || 11.1;
 
-  function computeSacLitersPerMinute(opts: {
-    depthMeters: number;
-    timeMinutes: number;
-    startPressureBar: number;
-    endPressureBar: number;
-    cylLiters: number;
-  }): number {
-    const { depthMeters, timeMinutes, startPressureBar, endPressureBar, cylLiters } = opts;
-    if (timeMinutes <= 0) return 0;
-    if (endPressureBar >= startPressureBar) return 0;
+      let sacLpm = 0;
+      if (depth > 0 && time > 0 && startP > 0 && endP > 0 && startP > endP) {
+        const barUsed = startP - endP;
+        const gasUsedLiters = barUsed * cyl;
+        const ambient = depth / 10 + 1; // rough
+        const rmv = gasUsedLiters / time;
+        sacLpm = rmv / ambient;
+      }
 
-    const deltaP = startPressureBar - endPressureBar;
-    const gasUsedSurfaceLiters = deltaP * cylLiters;
-    const ambientPressure = depthMeters / 10 + 1;
-    if (ambientPressure <= 0) return 0;
+      const payload = {
+        date: form.date || isoToday(),
+        site: form.site.trim() || 'UNNAMED SITE',
+        location: form.location.trim() || '—',
+        depthMeters: depth,
+        bottomTimeMin: time,
+        gas: form.gas,
+        sacLpm,
+        startBar: startP || undefined,
+        endBar: endP || undefined,
+        cylinderLiters: cyl || undefined,
+        notes: form.notes.trim() || undefined,
+      };
 
-    return gasUsedSurfaceLiters / timeMinutes / ambientPressure;
-  }
+      if (editingId != null) {
+        await updateDive(editingId, payload);
+        setDives((prev) =>
+          prev.map((d) => (d.id === editingId ? { ...d, ...payload, updatedAt: Date.now() } : d)),
+        );
+      } else {
+        if (!canAddDive) {
+          setSavingDive(false);
+          return;
+        }
+        const saved = await addDive(payload);
+        setDives((prev) => {
+          const list = [saved, ...prev];
+          list.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+          return list;
+        });
+      }
 
-  async function handleSaveNewDive(e: React.FormEvent) {
-    e.preventDefault();
-
-    const depth = Number(newDepth) || 0;
-    const time = Number(newTime) || 0;
-    const startP = Number(newStart) || 0;
-    const endP = Number(newEnd) || 0;
-    const cyl = Number(newCyl) || 11.1;
-    const o2 = Number(o2Percent) || (gasMode === 'AIR' ? 21 : 32);
-
-    const sac = computeSacLitersPerMinute({
-      depthMeters: depth,
-      timeMinutes: time,
-      startPressureBar: startP,
-      endPressureBar: endP,
-      cylLiters: cyl,
-    });
-
-    const gasString = gasMode === 'AIR' ? 'AIR' : `EAN${Math.round(o2)}`;
-
-    if (editId != null) {
-      await updateDive(editId, {
-        site: newSite.trim() || 'UNNAMED DIVE',
-        depth,
-        time,
-        startPressure: startP,
-        endPressure: endP,
-        cylLiters: cyl,
-        sac,
-        gas: gasString,
-      });
-    } else {
-      await addDive({
-        site: newSite.trim() || 'UNNAMED DIVE',
-        depth,
-        time,
-        startPressure: startP,
-        endPressure: endP,
-        cylLiters: cyl,
-        sac,
-        gas: gasString,
-      });
+      setForm(emptyDiveForm());
+      setEditingId(null);
+    } finally {
+      setSavingDive(false);
     }
-
-    await reload();
-    resetForm();
-  }
-
-  function handleCancelNewDive() {
-    resetForm();
-  }
-
-  function handleStartNewDive() {
-    if (!unlocked && dives.length >= 10) {
-      alert('Free limit reached. Unlock DecoLog to continue.');
-      return;
-    }
-    setEditId(null);
-    setNewSite('');
-    setNewDepth('18');
-    setNewTime('42');
-    setNewStart('210');
-    setNewEnd('70');
-    setNewCyl('11.1');
-    setGasMode('AIR');
-    setO2Percent('21');
-    setPpO2Limit('1.4');
-    setCylProfile('AL80');
-    setIsAdding(true);
   }
 
   function handleEditDive(dive: StoredDive) {
-    if (dive.id == null) return;
-    setTab('log');
-    setIsAdding(true);
-    setEditId(dive.id);
-    setNewSite(dive.site);
-    setNewDepth(String(dive.depth));
-    setNewTime(String(dive.time));
-    setNewStart(String(dive.startPressure));
-    setNewEnd(String(dive.endPressure));
-    setNewCyl(String(dive.cylLiters));
-    setCylProfile(resolveCylinderProfile(dive.cylLiters));
-
-    let mode: GasMode = 'AIR';
-    let o2 = '21';
-    const gasStr = (dive.gas || '').toUpperCase();
-    if (gasStr !== 'AIR') {
-      mode = 'NITROX';
-      const match = gasStr.match(/EAN(\d+)/);
-      if (match) o2 = match[1];
-    }
-    setGasMode(mode);
-    setO2Percent(o2);
-    setPpO2Limit('1.4');
+    setEditingId(dive.id ?? null);
+    setForm({
+      id: dive.id,
+      date: dive.date,
+      site: dive.site,
+      location: dive.location ?? '',
+      depth: dive.depthMeters ? String(dive.depthMeters) : '',
+      time: dive.bottomTimeMin ? String(dive.bottomTimeMin) : '',
+      gas: dive.gas === 'EAN32' ? 'EAN32' : 'AIR',
+      startBar: dive.startBar != null ? String(dive.startBar) : '',
+      endBar: dive.endBar != null ? String(dive.endBar) : '',
+      cylinderLiters: dive.cylinderLiters != null ? String(dive.cylinderLiters) : '11.1',
+      notes: dive.notes ?? '',
+    });
   }
 
   async function handleDeleteDive(id?: number) {
     if (id == null) return;
-    if (!window.confirm('Remove this dive from the log?')) return;
     await deleteDive(id);
-    await reload();
+    setDives((prev) => prev.filter((d) => d.id !== id));
+    if (editingId === id) {
+      setEditingId(null);
+      setForm(emptyDiveForm());
+    }
+  }
+
+  function handleCancelEdit() {
+    setEditingId(null);
+    setForm(emptyDiveForm());
+  }
+
+  // -------------------------------------------------------------------
+  // Profile handlers
+  // -------------------------------------------------------------------
+  async function handleSaveProfile() {
+    if (profileSaving) return;
+    setProfileSaving(true);
+    try {
+      const payload: ProfileInput = {
+        fullName: profile.fullName.trim(),
+        agency: profile.agency.trim(),
+        certLevel: profile.certLevel.trim(),
+        certNumber: profile.certNumber.trim(),
+        country: profile.country.trim(),
+        email: profile.email.trim(),
+        emergencyContactName: profile.emergencyContactName.trim(),
+        emergencyContactPhone: profile.emergencyContactPhone.trim(),
+        emergencyNotes: profile.emergencyNotes.trim(),
+        notes: profile.notes.trim(),
+      };
+      await saveProfile(payload);
+    } finally {
+      setProfileSaving(false);
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Support handlers
+  // -------------------------------------------------------------------
+  async function handleSaveSupport() {
+    if (supportSaving) return;
+    if (!supportSubject.trim() && !supportMessage.trim()) return;
+
+    setSupportSaving(true);
+    try {
+      const payload: SupportInput = {
+        subject: supportSubject.trim() || '(no subject)',
+        message: supportMessage.trim() || '(empty message)',
+        includeDevice: supportIncludeDevice,
+        deviceInfo: supportIncludeDevice ? deviceInfo : undefined,
+      };
+      await saveSupportMessage(payload);
+      setSupportSubject('');
+      setSupportMessage('');
+    } finally {
+      setSupportSaving(false);
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Export handlers
+  // -------------------------------------------------------------------
+  function downloadBlob(filename: string, blob: Blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   function handleExportJson() {
-    if (!dives.length) {
-      alert('No dives to export.');
-      return;
-    }
     const payload = {
-      schema: 'decolog.v1',
-      exportedAt: new Date().toISOString(),
-      unitsPreference: units,
-      profile: {
-        name: profName,
-        agency: profAgency,
-        level: profLevel,
-        defaultCylinder: profCylinder,
+      meta: {
+        app: 'DecoLog',
+        exportedAt: new Date().toISOString(),
+        count: dives.length,
       },
       dives,
     };
-    const json = JSON.stringify(payload, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    const date = new Date().toISOString().slice(0, 10);
-    a.href = url;
-    a.download = `decolog-export-${date}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json',
+    });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    downloadBlob(`decolog-export-${stamp}.json`, blob);
   }
 
   function handleExportCsv() {
-    if (!dives.length) {
-      alert('No dives to export.');
-      return;
-    }
-
     const header = [
       'id',
-      'createdAt',
+      'date',
       'site',
+      'location',
       'depth_m',
-      'time_min',
+      'bottom_time_min',
       'gas',
+      'sac_L_min',
       'start_bar',
       'end_bar',
-      'cyl_liters',
-      'sac_l_per_min',
+      'cylinder_L',
+      'notes',
     ];
+    const lines = [header.join(',')];
 
-    const dateStr = new Date().toISOString();
+    for (const d of dives) {
+      const row = [
+        d.id ?? '',
+        d.date,
+        `"${(d.site || '').replace(/"/g, '""')}"`,
+        `"${(d.location || '').replace(/"/g, '""')}"`,
+        d.depthMeters ?? '',
+        d.bottomTimeMin ?? '',
+        d.gas,
+        d.sacLpm ?? '',
+        d.startBar ?? '',
+        d.endBar ?? '',
+        d.cylinderLiters ?? '',
+        `"${(d.notes || '').replace(/"/g, '""')}"`,
+      ];
+      lines.push(row.join(','));
+    }
 
-    const lines = [
-      '# DECOLOG - OFFLINE DIVE LOG HUD',
-      `# export: ${dateStr}`,
-      `# diver: ${profName || ''}`,
-      `# agency: ${profAgency || ''}`,
-      `# level: ${profLevel || ''}`,
-      header.join(','),
-      ...dives.map((d, index) =>
-        [
-          d.id ?? index + 1,
-          d.createdAt,
-          d.site,
-          d.depth,
-          d.time,
-          d.gas,
-          d.startPressure,
-          d.endPressure,
-          d.cylLiters,
-          d.sac,
-        ].map(csvCell).join(','),
-      ),
-    ];
-
-    const csv = lines.join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    const date = dateStr.slice(0, 10);
-    a.href = url;
-    a.download = `decolog-export-${date}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    const blob = new Blob([lines.join('\n')], {
+      type: 'text/csv;charset=utf-8;',
+    });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    downloadBlob(`decolog-export-${stamp}.csv`, blob);
   }
 
-  async function handleExportPdf() {
+  function handleExportPdf() {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+    let y = 15;
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.text('DECOLOG / OFFLINE DIVE LOG', 14, y);
+    y += 6;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(`Exported: ${new Date().toLocaleString()}`, 14, y);
+    y += 8;
+
     if (!dives.length) {
-      alert('No dives to export.');
+      doc.text('No dives logged.', 14, y);
+      doc.save('decolog-export.pdf');
       return;
     }
-    try {
-      // @ts-ignore dynamic import
-      const mod = await import('jspdf');
-      const jsPDF = mod.default || mod.jsPDF;
-      const doc = new jsPDF();
 
-      doc.setFillColor(255, 255, 255);
-      doc.rect(0, 0, 210, 297, 'F');
+    const lineHeight = 5;
+    const maxY = 280;
 
-      doc.setFont('courier', 'bold');
-      doc.setFontSize(18);
-      doc.setTextColor(0, 0, 0);
-      doc.text('DECO', 14, 20);
-      doc.setTextColor(0, 255, 156);
-      doc.text('LOG', 44, 20);
-
-      doc.setFontSize(10);
-      doc.setTextColor(80, 80, 80);
-      doc.text('OFFLINE DIVE LOG HUD', 14, 26);
-
-      doc.setFontSize(12);
-      doc.setTextColor(0, 0, 0);
-      doc.text('Export summary', 14, 36);
-
-      doc.setFontSize(9);
-      const dateStr = new Date().toISOString();
-      doc.text(`Dives: ${dives.length}`, 14, 42);
-      doc.text(`Exported: ${dateStr}`, 14, 48);
-
-      if (profName) {
-        doc.text(`Diver: ${profName}`, 14, 54);
-      }
-      if (profAgency || profLevel) {
-        doc.text(
-          `Profile: ${profAgency || ''} ${profLevel ? ' / ' + profLevel : ''}`,
-          14,
-          60,
-        );
+    for (const d of dives) {
+      if (y > maxY) {
+        doc.addPage();
+        y = 15;
       }
 
-      let y = profName || profAgency || profLevel ? 72 : 60;
-      const lineHeight = 6;
-
-      doc.setFontSize(9);
-      doc.text('ID', 14, y);
-      doc.text('SITE', 26, y);
-      doc.text('DEPTH', 80, y);
-      doc.text('TIME', 104, y);
-      doc.text('GAS', 128, y);
-      doc.text('SAC (L/min)', 152, y);
-
+      doc.setFont('helvetica', 'bold');
+      doc.text(
+        `${niceDate(d.date)}  //  ${d.site || 'UNNAMED SITE'} (${d.location || '—'})`,
+        14,
+        y,
+      );
       y += lineHeight;
 
-      dives.forEach((dive, index) => {
-        const idStr = String(dive.id ?? index + 1);
-        const site = dive.site ?? '';
-        const depthStr = `${dive.depth} m`;
-        const timeStr = `${dive.time} min`;
-        const gasStr = dive.gas ?? '';
-        const sacStr = dive.sac ? `${dive.sac.toFixed(1)}` : '—';
+      doc.setFont('helvetica', 'normal');
 
-        doc.text(idStr, 14, y);
-        doc.text(site.substring(0, 24), 26, y);
-        doc.text(depthStr, 80, y);
-        doc.text(timeStr, 104, y);
-        doc.text(gasStr, 128, y);
-        doc.text(sacStr, 152, y);
+      doc.text(
+        `Depth: ${depthLabel(d.depthMeters, units)}   BT: ${formatMinutes(
+          d.bottomTimeMin,
+        )}   Gas: ${d.gas}`,
+        14,
+        y,
+      );
+      y += lineHeight;
 
-        y += lineHeight;
-        if (y > 280) {
-          doc.addPage();
-          y = 20;
-        }
-      });
+      doc.text(
+        `SAC: ${sacLabel(d.sacLpm ?? 0, units)}   Pressure: ${pressureLabel(
+          d.startBar,
+          units,
+        )} → ${pressureLabel(d.endBar, units)}   Cyl: ${
+          d.cylinderLiters ? `${d.cylinderLiters.toFixed?.(1) ?? d.cylinderLiters} L` : '—'
+        }`,
+        14,
+        y,
+      );
+      y += lineHeight;
 
-      const date = dateStr.slice(0, 10);
-      doc.save(`decolog-export-${date}.pdf`);
-    } catch (err) {
-      console.error(err);
-      alert('PDF export module not available. Make sure "npm install jspdf" ran OK.');
+      if (d.notes) {
+        const split = doc.splitTextToSize(`Notes: ${d.notes}`, 180);
+        doc.text(split, 14, y);
+        y += lineHeight * (split.length || 1);
+      }
+
+      y += lineHeight; // extra gap
     }
+
+    doc.save('decolog-export.pdf');
   }
 
-  async function handleProfileSave() {
-    await saveProfile({
-      name: profName,
-      agency: profAgency,
-      level: profLevel,
-      defaultCylinder: profCylinder,
-    });
-    alert('PROFILE SAVED');
-  }
-
-  const totalDives = dives.length;
-  const deepest = dives.length > 0 ? Math.max(...dives.map((d) => d.depth)) : 0;
-  const avgSac =
-    dives.length > 0
-      ? dives.reduce((sum, d) => sum + (d.sac || 0), 0) / dives.length
-      : 0;
-  const totalTime = dives.reduce((sum, d) => sum + d.time, 0);
-  const hours = Math.floor(totalTime / 60);
-  const minutes = totalTime % 60;
-
-  return (
-    <div className="min-h-screen bg-black text-zinc-100 flex justify-center text-[13px] mil-scan">
-      <div className="w-full max-w-screen flex flex-col min-h-screen bg-black">
-        <header className="flex items-center justify-between px-4 py-2 border-b border-zinc-700 bg-zinc-900">
-          <div className="flex items-center gap-3">
-            <img src="/decolog-logo.svg" className="h-10" />
-          </div>
-          <div className="flex items-center gap-4">
-            <UnitToggle units={units} setUnits={setUnits} />
-            <div className="font-mono text-[11px] mil-text">
-              ● UPLINK: READY
+  // -------------------------------------------------------------------
+  // Render helpers
+  // -------------------------------------------------------------------
+  function renderHeader() {
+    return (
+      <header className="mb-4 border-b border-emerald-500/40 pb-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded border border-emerald-500/60 bg-zinc-950 px-2 py-1">
+              <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+              <span className="font-mono text-[11px] tracking-[0.3em] text-emerald-300 uppercase">
+                DCL | MODULE 01
+              </span>
+            </div>
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="font-mono text-xl tracking-[0.28em] uppercase">
+                DECO<span className="text-emerald-400">LOG</span>
+              </span>
+              <span className="font-mono text-[10px] text-zinc-400 tracking-[0.18em] uppercase">
+                Offline dive log HUD
+              </span>
             </div>
           </div>
-        </header>
 
-        <nav className="flex border-b border-zinc-700 bg-zinc-900">
-          {(['log', 'stats', 'more'] as Tab[]).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`flex-1 px-3 py-2 font-mono text-[11px] uppercase tracking-[0.18em] border-r border-zinc-700 last:border-r-0 ${
-                tab === t
-                  ? 'bg-black text-emerald-300'
-                  : 'bg-zinc-900 text-zinc-400'
-              }`}
-            >
-              {t}
-            </button>
-          ))}
-        </nav>
-
-        <main className="flex-1 overflow-y-auto px-3 pt-3 pb-16">
-          {tab === 'log' && (
-            <LogView
-              dives={dives}
-              loading={loading}
-              isAdding={isAdding}
-              units={units}
-              newSite={newSite}
-              newDepth={newDepth}
-              newTime={newTime}
-              newStart={newStart}
-              newEnd={newEnd}
-              newCyl={newCyl}
-              gasMode={gasMode}
-              o2Percent={o2Percent}
-              ppO2Limit={ppO2Limit}
-              editId={editId}
-              cylProfile={cylProfile}
-              setNewSite={setNewSite}
-              setNewDepth={setNewDepth}
-              setNewTime={setNewTime}
-              setNewStart={setNewStart}
-              setNewEnd={setNewEnd}
-              setNewCyl={setNewCyl}
-              setGasMode={setGasMode}
-              setO2Percent={setO2Percent}
-              setPpO2Limit={setPpO2Limit}
-              setCylProfile={setCylProfile}
-              onSave={handleSaveNewDive}
-              onCancel={handleCancelNewDive}
-              onNewDive={handleStartNewDive}
-              onEditDive={handleEditDive}
-              onDeleteDive={handleDeleteDive}
-            />
-          )}
-
-          {tab === 'stats' && (
-            <StatsView
-              totalDives={totalDives}
-              deepest={deepest}
-              avgSac={avgSac}
-              hours={hours}
-              minutes={minutes}
-              units={units}
-            />
-          )}
-
-          {tab === 'more' && (
-            <MoreView
-              unlocked={unlocked}
-              onUnlock={() => {
-                setUnlocked(true);
-                setUnlockedState(true);
-              }}
-              onExportJson={handleExportJson}
-              onExportCsv={handleExportCsv}
-              onExportPdf={handleExportPdf}
-              profName={profName}
-              profAgency={profAgency}
-              profLevel={profLevel}
-              profCylinder={profCylinder}
-              setProfName={setProfName}
-              setProfAgency={setProfAgency}
-              setProfLevel={setProfLevel}
-              setProfCylinder={setProfCylinder}
-              onProfileSave={handleProfileSave}
-            />
-          )}
-        </main>
-      </div>
-    </div>
-  );
-}
-
-function UnitToggle({
-  units,
-  setUnits,
-}: {
-  units: Units;
-  setUnits: (u: Units) => void;
-}) {
-  return (
-    <div className="flex items-center gap-1 font-mono text-[11px]">
-      <span className="text-zinc-500">UNITS</span>
-      <button
-        type="button"
-        onClick={() => setUnits('metric')}
-        className={`px-2 py-[2px] border border-zinc-600 ${
-          units === 'metric'
-            ? 'bg-emerald-700/40 text-emerald-300'
-            : 'bg-black text-zinc-500'
-        }`}
-      >
-        M
-      </button>
-      <button
-        type="button"
-        onClick={() => setUnits('imperial')}
-        className={`px-2 py-[2px] border border-zinc-600 ${
-          units === 'imperial'
-            ? 'bg-emerald-700/40 text-emerald-300'
-            : 'bg-black text-zinc-500'
-        }`}
-      >
-        I
-      </button>
-    </div>
-  );
-}
-
-function LogView(props: {
-  dives: StoredDive[];
-  loading: boolean;
-  isAdding: boolean;
-  units: Units;
-  newSite: string;
-  newDepth: string;
-  newTime: string;
-  newStart: string;
-  newEnd: string;
-  newCyl: string;
-  gasMode: GasMode;
-  o2Percent: string;
-  ppO2Limit: string;
-  editId: number | null;
-  cylProfile: CylinderProfileId;
-  setNewSite: (v: string) => void;
-  setNewDepth: (v: string) => void;
-  setNewTime: (v: string) => void;
-  setNewStart: (v: string) => void;
-  setNewEnd: (v: string) => void;
-  setNewCyl: (v: string) => void;
-  setGasMode: (v: GasMode) => void;
-  setO2Percent: (v: string) => void;
-  setPpO2Limit: (v: string) => void;
-  setCylProfile: (id: CylinderProfileId) => void;
-  onSave: (e: React.FormEvent) => void;
-  onCancel: () => void;
-  onNewDive: () => void;
-  onEditDive: (d: StoredDive) => void;
-  onDeleteDive: (id?: number) => void;
-}) {
-  const {
-    dives,
-    loading,
-    isAdding,
-    units,
-    newSite,
-    newDepth,
-    newTime,
-    newStart,
-    newEnd,
-    newCyl,
-    gasMode,
-    o2Percent,
-    ppO2Limit,
-    editId,
-    cylProfile,
-    setNewSite,
-    setNewDepth,
-    setNewTime,
-    setNewStart,
-    setNewEnd,
-    setNewCyl,
-    setGasMode,
-    setO2Percent,
-    setPpO2Limit,
-    setCylProfile,
-    onSave,
-    onCancel,
-    onNewDive,
-    onEditDive,
-    onDeleteDive,
-  } = props;
-
-  function handleProfileChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    const id = e.target.value as CylinderProfileId;
-    setCylProfile(id);
-    const preset = CYL_PROFILES.find((p) => p.id === id);
-    if (preset && preset.liters != null) {
-      setNewCyl(preset.liters.toString());
-    }
-  }
-
-  function handleCylInputChange(e: React.ChangeEvent<HTMLInputElement>) {
-    setNewCyl(e.target.value);
-    setCylProfile('CUSTOM');
-  }
-
-  return (
-    <section>
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-xs font-mono text-zinc-500 uppercase tracking-[0.18em]">
-          DIVE LOG
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.2em]">
+              <span className="text-zinc-500">UNITS</span>
+              <button
+                type="button"
+                onClick={() => setUnits('metric')}
+                className={`rounded border px-2 py-1 ${
+                  units === 'metric'
+                    ? 'border-emerald-400 bg-emerald-500/10 text-emerald-300'
+                    : 'border-zinc-700 text-zinc-400'
+                }`}
+              >
+                METRIC
+              </button>
+              <button
+                type="button"
+                onClick={() => setUnits('imperial')}
+                className={`rounded border px-2 py-1 ${
+                  units === 'imperial'
+                    ? 'border-emerald-400 bg-emerald-500/10 text-emerald-300'
+                    : 'border-zinc-700 text-zinc-400'
+                }`}
+              >
+                IMPERIAL
+              </button>
+            </div>
+            <div className="font-mono text-[10px] text-zinc-500 tracking-[0.18em]">
+              {isPro ? 'LICENSE: PRO MODE (UNLOCKED)' : `LICENSE: TRAINING (UP TO ${FREE_LIMIT} DIVES)`}
+            </div>
+          </div>
         </div>
-        {!isAdding && (
+      </header>
+    );
+  }
+
+  function renderTabs() {
+    return (
+      <div className="mb-4 flex gap-2 font-mono text-[11px] uppercase tracking-[0.2em]">
+        {(['log', 'stats', 'more'] as Tab[]).map((t) => (
           <button
+            key={t}
             type="button"
-            className="font-mono text-[11px] px-3 py-1 border border-emerald-500 text-emerald-300 rounded-md hover:bg-zinc-900 transition-colors"
-            onClick={onNewDive}
+            onClick={() => setTab(t)}
+            className={`flex-1 rounded border px-3 py-2 ${
+              tab === t
+                ? 'border-emerald-500 bg-emerald-500/10 text-emerald-200'
+                : 'border-zinc-700 bg-zinc-950 text-zinc-400 hover:border-emerald-500/60'
+            }`}
           >
-            + NEW DIVE
+            {t === 'log' && 'LOG'}
+            {t === 'stats' && 'STATS'}
+            {t === 'more' && 'MORE'}
           </button>
-        )}
+        ))}
       </div>
+    );
+  }
 
-      {isAdding && (
-        <form
-          onSubmit={onSave}
-          className="mb-3 p-3 border border-zinc-700 bg-zinc-900 space-y-2 mil-panel"
-        >
-          <div className="flex items-center justify-between">
-            <div className="text-[11px] font-mono mil-dim uppercase tracking-[0.18em] mb-1">
-              {editId != null ? 'EDIT DIVE' : 'NEW DIVE'}
-            </div>
-            {editId != null && (
-              <div className="text-[10px] font-mono mil-dim">
-                ID: #{editId}
-              </div>
-            )}
+  function renderLogTab() {
+    return (
+      <section className="grid gap-4 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+        {/* New / edit form */}
+        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+            {editingId != null ? 'EDIT DIVE' : 'NEW DIVE'}
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-[11px] mil-dim uppercase block mb-1">
-                Site
+          {!canAddDive && editingId == null && (
+            <div className="mb-3 rounded border border-amber-500/50 bg-amber-500/10 p-2 font-mono text-[10px] text-amber-300">
+              FREE TIER LIMIT REACHED ({FREE_LIMIT} DIVES). ENABLE PRO MODE IN MORE → LICENSE MODULE.
+            </div>
+          )}
+
+          <div className="grid gap-2 text-[13px]">
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex flex-col gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                  Date
+                </span>
+                <input
+                  type="date"
+                  className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                  value={form.date}
+                  onChange={(e) => handleFormChange('date', e.target.value)}
+                />
               </label>
+
+              <label className="flex flex-col gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                  Location
+                </span>
+                <input
+                  type="text"
+                  className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                  value={form.location}
+                  onChange={(e) => handleFormChange('location', e.target.value)}
+                />
+              </label>
+            </div>
+
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Site name
+              </span>
               <input
-                className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
-                value={newSite}
-                onChange={(e) => setNewSite(e.target.value)}
-                placeholder="BLUE HOLE"
+                type="text"
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={form.site}
+                onChange={(e) => handleFormChange('site', e.target.value)}
               />
-            </div>
+            </label>
 
-            <div>
-              <label className="text-[11px] mil-dim uppercase block mb-1">
-                Gas Mode
+            <div className="grid grid-cols-3 gap-2">
+              <label className="flex flex-col gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                  Max depth (m)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                  value={form.depth}
+                  onChange={(e) => handleFormChange('depth', e.target.value)}
+                />
               </label>
-              <select
-                className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
-                value={gasMode}
-                onChange={(e) => {
-                  const v = e.target.value as GasMode;
-                  setGasMode(v);
-                  if (v === 'AIR') setO2Percent('21');
-                }}
-              >
-                <option value="AIR">AIR</option>
-                <option value="NITROX">NITROX</option>
-              </select>
-            </div>
 
-            <div>
-              <label className="text-[11px] mil-dim uppercase block mb-1">
-                O₂ %
+              <label className="flex flex-col gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                  Bottom time (min)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                  value={form.time}
+                  onChange={(e) => handleFormChange('time', e.target.value)}
+                />
               </label>
-              <input
-                className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
-                value={o2Percent}
-                onChange={(e) => setO2Percent(e.target.value)}
-                disabled={gasMode === 'AIR'}
-              />
-            </div>
 
-            <div>
-              <label className="text-[11px] mil-dim uppercase block mb-1">
-                ppO₂ Limit
+              <label className="flex flex-col gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                  Cylinder (L)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.1"
+                  className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                  value={form.cylinderLiters}
+                  onChange={(e) => handleFormChange('cylinderLiters', e.target.value)}
+                />
               </label>
-              <input
-                className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
-                value={ppO2Limit}
-                onChange={(e) => setPpO2Limit(e.target.value)}
-                disabled={gasMode === 'AIR'}
-              />
             </div>
 
-            <div>
-              <label className="text-[11px] mil-dim uppercase block mb-1">
-                MOD
+            <div className="grid grid-cols-3 gap-2">
+              <label className="flex flex-col gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                  Start (bar)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                  value={form.startBar}
+                  onChange={(e) => handleFormChange('startBar', e.target.value)}
+                />
               </label>
-              <div className="font-mono text-[13px] mil-text">
-                {computeMOD(Number(o2Percent), Number(ppO2Limit), units)}
-              </div>
-            </div>
 
-            <div>
-              <label className="text-[11px] mil-dim uppercase block mb-1">
-                Depth (m)
+              <label className="flex flex-col gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                  End (bar)
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                  value={form.endBar}
+                  onChange={(e) => handleFormChange('endBar', e.target.value)}
+                />
               </label>
-              <input
-                className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
-                value={newDepth}
-                onChange={(e) => setNewDepth(e.target.value)}
-                placeholder="18"
-                inputMode="decimal"
-              />
-            </div>
-            <div>
-              <label className="text-[11px] mil-dim uppercase block mb-1">
-                Time (min)
-              </label>
-              <input
-                className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
-                value={newTime}
-                onChange={(e) => setNewTime(e.target.value)}
-                placeholder="42"
-                inputMode="decimal"
-              />
-            </div>
 
-            <div>
-              <label className="text-[11px] mil-dim uppercase block mb-1">
-                Start (bar)
-              </label>
-              <input
-                className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
-                value={newStart}
-                onChange={(e) => setNewStart(e.target.value)}
-                placeholder="210"
-                inputMode="decimal"
-              />
-            </div>
-            <div>
-              <label className="text-[11px] mil-dim uppercase block mb-1">
-                End (bar)
-              </label>
-              <input
-                className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
-                value={newEnd}
-                onChange={(e) => setNewEnd(e.target.value)}
-                placeholder="70"
-                inputMode="decimal"
-              />
-            </div>
-
-            <div>
-              <label className="text-[11px] mil-dim uppercase block mb-1">
-                Cylinder
-              </label>
-              <select
-                className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
-                value={cylProfile}
-                onChange={handleProfileChange}
-              >
-                {CYL_PROFILES.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="text-[11px] mil-dim uppercase block mb-1">
-                Cyl (L)
-              </label>
-              <input
-                className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
-                value={newCyl}
-                onChange={handleCylInputChange}
-                placeholder="11.1"
-                inputMode="decimal"
-              />
-            </div>
-          </div>
-
-          <div className="flex justify-between items-center pt-1">
-            {editId != null && (
-              <button
-                type="button"
-                className="font-mono text-[10px] text-zinc-500 underline underline-offset-4"
-                onClick={() => {
-                  setNewSite('');
-                  setNewDepth('18');
-                  setNewTime('42');
-                  setNewStart('210');
-                  setNewEnd('70');
-                  setNewCyl('11.1');
-                  setGasMode('AIR');
-                  setO2Percent('21');
-                  setPpO2Limit('1.4');
-                  setCylProfile('AL80');
-                }}
-              >
-                CLEAR TO NEW
-              </button>
-            )}
-            <div className="flex gap-2 ml-auto">
-              <button
-                type="button"
-                className="font-mono text-[11px] px-3 py-1 text-zinc-500"
-                onClick={onCancel}
-              >
-                CANCEL
-              </button>
-              <button
-                type="submit"
-                className="font-mono text-[11px] px-3 py-1 border border-emerald-500 bg-emerald-500/10 text-emerald-300 rounded-md"
-              >
-                SAVE
-              </button>
-            </div>
-          </div>
-        </form>
-      )}
-
-      {loading && (
-        <div className="font-mono text-[12px] text-zinc-500">loading…</div>
-      )}
-
-      {!loading && dives.length === 0 && (
-        <div className="font-mono text-[12px] text-zinc-500">
-          no dives logged.
-        </div>
-      )}
-
-      {!loading && dives.length > 0 && (
-        <section className="space-y-3">
-          {dives.map((dive, index) => (
-            <article
-              key={dive.id ?? dive.createdAt}
-              className="mil-panel rounded-lg p-4 mb-2"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-[10px] font-mono tracking-[0.25em] mil-dim">
-                  DIVE LOG ENTRY
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="text-[11px] font-mono mil-dim">
-                    #{dive.id ?? index + 1}
-                  </div>
+              <div className="flex flex-col gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                  Gas
+                </span>
+                <div className="flex gap-1">
                   <button
                     type="button"
-                    className="text-[10px] font-mono text-emerald-300 underline underline-offset-4"
-                    onClick={() => onEditDive(dive)}
+                    onClick={() => handleFormChange('gas', 'AIR')}
+                    className={`flex-1 rounded border px-2 py-1 text-xs ${
+                      form.gas === 'AIR'
+                        ? 'border-emerald-400 bg-emerald-500/10 text-emerald-200'
+                        : 'border-zinc-700 text-zinc-400'
+                    }`}
+                  >
+                    AIR
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleFormChange('gas', 'EAN32')}
+                    className={`flex-1 rounded border px-2 py-1 text-xs ${
+                      form.gas === 'EAN32'
+                        ? 'border-emerald-400 bg-emerald-500/10 text-emerald-200'
+                        : 'border-zinc-700 text-zinc-400'
+                    }`}
+                  >
+                    EAN32
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Notes
+              </span>
+              <textarea
+                rows={3}
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={form.notes}
+                onChange={(e) => handleFormChange('notes', e.target.value)}
+              />
+            </label>
+
+            <div className="mt-1 flex gap-2">
+              <button
+                type="button"
+                disabled={savingDive || (!canAddDive && editingId == null)}
+                onClick={handleSaveDive}
+                className="flex-1 rounded border border-emerald-500 bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200 disabled:border-zinc-700 disabled:text-zinc-500"
+              >
+                {editingId != null ? 'UPDATE DIVE' : 'LOG DIVE'}
+              </button>
+              {editingId != null && (
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  className="rounded border border-zinc-700 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-zinc-300"
+                >
+                  CANCEL
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Dive list */}
+        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+              DIVE LOG
+            </div>
+            <div className="font-mono text-[10px] text-zinc-500 tracking-[0.18em]">
+              TOTAL: {dives.length}
+            </div>
+          </div>
+
+          {loading && (
+            <div className="py-6 text-center font-mono text-[11px] text-zinc-500 tracking-[0.18em]">
+              LOADING DIVE DATA…
+            </div>
+          )}
+
+          {!loading && !dives.length && (
+            <div className="py-6 text-center font-mono text-[11px] text-zinc-500 tracking-[0.18em]">
+              NO DIVES LOGGED YET.
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2">
+            {dives.map((d) => (
+              <div
+                key={d.id}
+                className="rounded border border-zinc-700 bg-zinc-900/60 px-3 py-2 text-[13px]"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="font-mono text-[11px] tracking-[0.18em] text-zinc-300">
+                    {niceDate(d.date)} // {d.site || 'UNNAMED SITE'}
+                  </div>
+                  <div className="font-mono text-[10px] text-zinc-500">
+                    {d.location || '—'}
+                  </div>
+                </div>
+
+                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[10px] text-zinc-400">
+                  <span>DEPTH {depthLabel(d.depthMeters, units)}</span>
+                  <span>BT {formatMinutes(d.bottomTimeMin)}</span>
+                  <span>GAS {d.gas}</span>
+                  <span>SAC {sacLabel(d.sacLpm ?? 0, units)}</span>
+                </div>
+
+                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[10px] text-zinc-500">
+                  <span>
+                    PRESS {pressureLabel(d.startBar, units)} → {pressureLabel(d.endBar, units)}
+                  </span>
+                  <span>
+                    CYL{' '}
+                    {d.cylinderLiters
+                      ? `${d.cylinderLiters.toFixed?.(1) ?? d.cylinderLiters} L`
+                      : '—'}
+                  </span>
+                </div>
+
+                {d.notes && (
+                  <div className="mt-1 font-mono text-[10px] text-zinc-400">
+                    NOTES: {d.notes}
+                  </div>
+                )}
+
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleEditDive(d)}
+                    className="rounded border border-zinc-700 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-300"
                   >
                     EDIT
                   </button>
                   <button
                     type="button"
-                    className="text-[10px] font-mono text-red-400 underline underline-offset-4"
-                    onClick={() => onDeleteDive(dive.id)}
+                    onClick={() => handleDeleteDive(d.id)}
+                    className="rounded border border-red-500/70 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-red-300"
                   >
                     DELETE
                   </button>
                 </div>
               </div>
-
-              <div className="font-mono text-[15px] mb-3 mil-text">
-                {dive.site}
-              </div>
-
-              <div className="grid grid-cols-2 gap-x-6 gap-y-4 text-[13px]">
-                <InfoBlock
-                  label="Depth"
-                  value={depthLabel(dive.depth, units)}
-                />
-                <InfoBlock label="Time" value={`${dive.time} min`} />
-                <InfoBlock label="Gas" value={dive.gas} />
-                <InfoBlock label="SAC" value={sacLabel(dive.sac, units)} accent />
-                <InfoBlock
-                  label="Start"
-                  value={pressureLabel(dive.startPressure, units)}
-                />
-                <InfoBlock
-                  label="End"
-                  value={pressureLabel(dive.endPressure, units)}
-                />
-                <InfoBlock
-                  label="Cyl"
-                  value={cylLabel(dive.cylLiters, units)}
-                />
-              </div>
-            </article>
-          ))}
-        </section>
-      )}
-    </section>
-  );
-}
-
-function InfoBlock({
-  label,
-  value,
-  accent = false,
-}: {
-  label: string;
-  value: string;
-  accent?: boolean;
-}) {
-  return (
-    <div>
-      <div className="text-[11px] font-semibold uppercase tracking-[0.12em] mil-dim">
-        {label}
-      </div>
-      <div
-        className={
-          accent
-            ? 'font-mono text-[14px] mil-text'
-            : 'font-mono text-[14px]'
-        }
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function StatsView(props: {
-  totalDives: number;
-  deepest: number;
-  avgSac: number;
-  hours: number;
-  minutes: number;
-  units: Units;
-}) {
-  const { totalDives, deepest, avgSac, hours, minutes, units } = props;
-
-  return (
-    <section className="mt-3 space-y-3">
-      <div className="flex items-baseline justify-between px-1">
-        <div className="text-[10px] font-mono tracking-[0.25em] mil-dim uppercase">
-          SYSTEM STATS
+            ))}
+          </div>
         </div>
-        <div className="text-[10px] font-mono mil-dim">
-          ENTRIES: {totalDives}
-        </div>
-      </div>
+      </section>
+    );
+  }
 
-      <div className="grid grid-cols-2 gap-3">
-        <StatCard label="Total Dives" value={String(totalDives)} />
-        <StatCard label="Avg SAC" value={sacLabel(avgSac, units)} />
-        <StatCard
-          label="Deepest Dive"
-          value={depthLabel(deepest, units)}
-        />
-        <StatCard label="Total BT" value={`${hours}h ${minutes}m`} />
-      </div>
-    </section>
-  );
-}
-
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="mil-panel rounded-lg p-3">
-      <div className="text-[10px] font-mono uppercase tracking-[0.18em] mil-dim mb-1">
-        {label}
-      </div>
-      <div className="font-mono text-[18px] mil-text leading-tight">
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function MoreView({
-  unlocked,
-  onUnlock,
-  onExportJson,
-  onExportCsv,
-  onExportPdf,
-  profName,
-  profAgency,
-  profLevel,
-  profCylinder,
-  setProfName,
-  setProfAgency,
-  setProfLevel,
-  setProfCylinder,
-  onProfileSave,
-}: {
-  unlocked: boolean;
-  onUnlock: () => void;
-  onExportJson: () => void;
-  onExportCsv: () => void;
-  onExportPdf: () => void;
-  profName: string;
-  profAgency: string;
-  profLevel: string;
-  profCylinder: string;
-  setProfName: (v: string) => void;
-  setProfAgency: (v: string) => void;
-  setProfLevel: (v: string) => void;
-  setProfCylinder: (v: string) => void;
-  onProfileSave: () => void;
-}) {
-  return (
-    <section className="more-shell space-y-3">
-      <div className="more-header-line">
-        CONTROL / MORE MODULES
-      </div>
-
-      {/* Diver Profile Module */}
-      <div className="mil-panel rounded-lg p-3">
-        <div className="text-[10px] font-mono tracking-[0.25em] mil-dim uppercase mb-2">
-          DIVER MODULE
+  function renderStatsTab() {
+    return (
+      <section className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
+        <div className="mb-3 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+          STATS MODULE
         </div>
 
-        <div className="space-y-2">
-          <div>
-            <div className="text-[10px] font-mono mil-dim uppercase mb-1">
-              Name
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="rounded border border-zinc-700 bg-zinc-900/60 p-3">
+            <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-500">
+              TOTAL DIVES
             </div>
-            <input
-              className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
-              value={profName}
-              onChange={(e) => setProfName(e.target.value)}
-              placeholder="Diver Name"
-            />
+            <div className="mt-1 font-mono text-xl tracking-[0.15em] text-emerald-300">
+              {stats.count}
+            </div>
+            <div className="mt-1 font-mono text-[10px] text-zinc-500">
+              BOTTOM TIME {formatTotalMinutes(stats.totalMinutes)}
+            </div>
           </div>
 
-          <div>
-            <div className="text-[10px] font-mono mil-dim uppercase mb-1">
-              Agency
+          <div className="rounded border border-zinc-700 bg-zinc-900/60 p-3">
+            <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-500">
+              DEPTH / GAS
             </div>
-            <input
-              className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
-              value={profAgency}
-              onChange={(e) => setProfAgency(e.target.value)}
-              placeholder="PADI / TDI / GUE"
-            />
+            <div className="mt-1 font-mono text-[13px] text-zinc-200">
+              MAX {depthLabel(stats.maxDepth, units)}
+            </div>
+            <div className="mt-1 font-mono text-[10px] text-zinc-500">
+              AIR: {stats.divesByGas.AIR} | EAN32: {stats.divesByGas.EAN32}
+            </div>
           </div>
 
-          <div>
-            <div className="text-[10px] font-mono mil-dim uppercase mb-1">
-              Level
+          <div className="rounded border border-zinc-700 bg-zinc-900/60 p-3">
+            <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-500">
+              SAC
             </div>
-            <input
-              className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
-              value={profLevel}
-              onChange={(e) => setProfLevel(e.target.value)}
-              placeholder="AOW / TEC / CAVE"
-            />
+            <div className="mt-1 font-mono text-[13px] text-zinc-200">
+              AVG {sacLabel(stats.avgSac, units)}
+            </div>
+            <div className="mt-1 font-mono text-[10px] text-zinc-500">
+              Metric baseline stored internally
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  function renderMoreTab() {
+    return (
+      <section className="flex flex-col gap-4">
+        {/* Diver profile */}
+        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+            DIVER PROFILE
           </div>
 
-          <div>
-            <div className="text-[10px] font-mono mil-dim uppercase mb-1">
-              Default Cylinder
-            </div>
-            <input
-              className="w-full bg-black border border-zinc-700 px-2 py-1 text-[12px] font-mono"
-              value={profCylinder}
-              onChange={(e) => setProfCylinder(e.target.value)}
-              placeholder="AL80 / HP100"
-            />
+          <div className="grid gap-2 md:grid-cols-2 text-[13px]">
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Full name
+              </span>
+              <input
+                type="text"
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={profile.fullName}
+                onChange={(e) => setProfile((p) => ({ ...p, fullName: e.target.value }))}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Country
+              </span>
+              <input
+                type="text"
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={profile.country}
+                onChange={(e) => setProfile((p) => ({ ...p, country: e.target.value }))}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Agency
+              </span>
+              <input
+                type="text"
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={profile.agency}
+                onChange={(e) => setProfile((p) => ({ ...p, agency: e.target.value }))}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Certification level
+              </span>
+              <input
+                type="text"
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={profile.certLevel}
+                onChange={(e) => setProfile((p) => ({ ...p, certLevel: e.target.value }))}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Certification number
+              </span>
+              <input
+                type="text"
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={profile.certNumber}
+                onChange={(e) => setProfile((p) => ({ ...p, certNumber: e.target.value }))}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Email
+              </span>
+              <input
+                type="email"
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={profile.email}
+                onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value }))}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Emergency contact name
+              </span>
+              <input
+                type="text"
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={profile.emergencyContactName}
+                onChange={(e) =>
+                  setProfile((p) => ({ ...p, emergencyContactName: e.target.value }))
+                }
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Emergency contact phone
+              </span>
+              <input
+                type="text"
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={profile.emergencyContactPhone}
+                onChange={(e) =>
+                  setProfile((p) => ({ ...p, emergencyContactPhone: e.target.value }))
+                }
+              />
+            </label>
           </div>
 
-          <div className="flex justify-end pt-1">
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Emergency notes
+              </span>
+              <textarea
+                rows={3}
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={profile.emergencyNotes}
+                onChange={(e) =>
+                  setProfile((p) => ({ ...p, emergencyNotes: e.target.value }))
+                }
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Additional notes
+              </span>
+              <textarea
+                rows={3}
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={profile.notes}
+                onChange={(e) => setProfile((p) => ({ ...p, notes: e.target.value }))}
+              />
+            </label>
+          </div>
+
+          <div className="mt-2 flex justify-end">
             <button
-              className="border border-emerald-500 text-emerald-300 px-3 py-1 font-mono text-[11px] tracking-[0.12em]"
               type="button"
-              onClick={onProfileSave}
+              disabled={profileSaving}
+              onClick={handleSaveProfile}
+              className="rounded border border-emerald-500 bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200 disabled:border-zinc-700 disabled:text-zinc-500"
             >
               SAVE PROFILE
             </button>
           </div>
         </div>
-      </div>
 
-      {/* System module */}
-      <div className="mil-panel rounded-lg p-3">
-        <div className="text-[10px] font-mono tracking-[0.25em] mil-dim uppercase mb-2">
-          SYSTEM MODULE
-        </div>
-
-        <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
-          <div className="mil-dim">OFFLINE MODE</div>
-          <div className="mil-text text-right">ACTIVE</div>
-
-          <div className="mil-dim">CLOUD SYNC</div>
-          <div className="text-right text-zinc-500">PENDING</div>
-
-          <div className="mil-dim">BUILD</div>
-          <div className="text-right text-zinc-500">VERCEL</div>
-        </div>
-      </div>
-
-      {/* License module */}
-      <div className="mil-panel rounded-lg p-3">
-        <div className="text-[10px] font-mono tracking-[0.25em] mil-dim uppercase mb-2">
-          LICENSE MODULE
-        </div>
-
-        <div className="text-[11px] font-mono mil-dim">
-          TIER: OFFLINE FREE
-        </div>
-
-        {!unlocked ? (
-          <button
-            className="mt-3 w-full border border-emerald-500 text-emerald-300 px-3 py-2 font-mono text-[11px] tracking-[0.18em]"
-            onClick={onUnlock}
-          >
-            UNLOCK MODULE
-          </button>
-        ) : (
-          <div className="mt-3 font-mono text-[11px] text-emerald-400 tracking-[0.12em]">
-            MODULE STATUS: ACTIVE
+        {/* Support */}
+        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+            SUPPORT / CONTACT
           </div>
-        )}
-      </div>
 
-      {/* Export module */}
-      <div className="mil-panel rounded-lg p-3">
-        <div className="text-[10px] font-mono tracking-[0.25em] mil-dim uppercase mb-2">
-          EXPORT MODULE
+          <div className="grid gap-2 text-[13px]">
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Subject
+              </span>
+              <input
+                type="text"
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={supportSubject}
+                onChange={(e) => setSupportSubject(e.target.value)}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Message
+              </span>
+              <textarea
+                rows={4}
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={supportMessage}
+                onChange={(e) => setSupportMessage(e.target.value)}
+              />
+            </label>
+
+            <label className="mt-1 flex items-center gap-2 font-mono text-[10px] text-zinc-400">
+              <input
+                type="checkbox"
+                className="h-3 w-3 border border-zinc-600 bg-zinc-900 accent-emerald-500"
+                checked={supportIncludeDevice}
+                onChange={(e) => setSupportIncludeDevice(e.target.checked)}
+              />
+              Include anonymous device info (helps debugging)
+            </label>
+
+            <div className="mt-1 flex items-center justify-between">
+              <div className="max-w-md font-mono text-[9px] text-zinc-500">
+                Messages are stored locally in DecoLog for now. Sync / send-out will be wired later.
+              </div>
+              <button
+                type="button"
+                disabled={supportSaving}
+                onClick={handleSaveSupport}
+                className="rounded border border-emerald-500 bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200 disabled:border-zinc-700 disabled:text-zinc-500"
+              >
+                SAVE MESSAGE
+              </button>
+            </div>
+          </div>
         </div>
 
-        <div className="export-keys">
-          <button
-            className="export-key-btn border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
-            onClick={onExportJson}
-          >
-            EXPORT JSON
-          </button>
+        {/* License + Export */}
+        <div className="grid gap-4 md:grid-cols-[minmax(0,1.4fr)_minmax(0,2fr)]">
+          {/* License module */}
+          <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+            <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+              LICENSE MODULE
+            </div>
+            <div className="font-mono text-[11px] text-zinc-300">
+              CURRENT MODE:{' '}
+              <span className={isPro ? 'text-emerald-300' : 'text-amber-300'}>
+                {isPro ? 'PRO (UNLOCKED)' : 'TRAINING'}
+              </span>
+            </div>
+            <div className="mt-1 font-mono text-[10px] text-zinc-500">
+              Training: up to {FREE_LIMIT} dives on this device. Pro: unlimited local storage.
+            </div>
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={() => setIsPro((prev) => !prev)}
+                className="rounded border border-zinc-700 bg-zinc-900 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-zinc-300"
+              >
+                TOGGLE PRO MODE (DEV SWITCH)
+              </button>
+            </div>
+          </div>
 
-          <button
-            className="export-key-btn border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
-            onClick={onExportCsv}
-          >
-            EXPORT CSV
-          </button>
+          {/* Export module */}
+          <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+            <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+              EXPORT MODULE
+            </div>
 
-          <button
-            className="export-key-btn border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
-            onClick={onExportPdf}
-          >
-            EXPORT PDF
-          </button>
+            <div className="export-keys flex flex-wrap gap-2">
+              <button
+                className="export-key-btn border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
+                onClick={handleExportJson}
+              >
+                EXPORT JSON
+              </button>
+
+              <button
+                className="export-key-btn border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
+                onClick={handleExportCsv}
+              >
+                EXPORT CSV
+              </button>
+
+              <button
+                className="export-key-btn border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
+                onClick={handleExportPdf}
+              >
+                EXPORT PDF
+              </button>
+            </div>
+
+            <div className="mt-3 font-mono text-[10px] text-zinc-500">
+              Branded as <span className="text-emerald-300">DECOLOG</span> with key dive metrics for
+              audits / backups.
+            </div>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
+    );
+  }
+
+  // -------------------------------------------------------------------
+  // Main render
+  // -------------------------------------------------------------------
+  return (
+    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+      <main className="mx-auto max-w-5xl px-3 py-4 md:py-6">
+        {renderHeader()}
+        {renderTabs()}
+        {tab === 'log' && renderLogTab()}
+        {tab === 'stats' && renderStatsTab()}
+        {tab === 'more' && renderMoreTab()}
+      </main>
+    </div>
   );
 }

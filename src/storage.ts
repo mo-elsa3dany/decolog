@@ -1,112 +1,154 @@
-import { db, type DiveRecord, type DiverProfile } from './db';
+import {
+  db,
+  type DiveRecord,
+  type DiverProfile,
+  type SupportMessage,
+  type GasKind,
+} from './db';
 
 export type StoredDive = DiveRecord;
+export type ProfileInput = {
+  fullName: string;
+  agency: string;
+  certLevel: string;
+  certNumber: string;
+  country: string;
+  email: string;
+  emergencyContactName: string;
+  emergencyContactPhone: string;
+  emergencyNotes: string;
+  notes: string;
+};
 
-// One-time unlock key (free vs unlocked tier)
-const UNLOCK_KEY = 'decolog.unlock';
+export type SupportInput = {
+  subject: string;
+  message: string;
+  includeDevice: boolean;
+  deviceInfo?: string;
+};
 
-export function isUnlocked(): boolean {
-  if (typeof window === 'undefined') return false;
-  return window.localStorage.getItem(UNLOCK_KEY) === '1';
-}
-
-export function setUnlocked(value: boolean): void {
-  if (typeof window === 'undefined') return;
-  if (value) {
-    window.localStorage.setItem(UNLOCK_KEY, '1');
-  } else {
-    window.localStorage.removeItem(UNLOCK_KEY);
-  }
-}
-
-// Seed demo dives if database is empty
-export async function seedIfEmpty(): Promise<StoredDive[]> {
+// ---------------------------------------------------------------------
+// Seed
+// ---------------------------------------------------------------------
+export async function seedIfEmpty(): Promise<void> {
   const count = await db.dives.count();
-  if (count === 0) {
-    const now = new Date();
-    const baseDate = now.toISOString();
+  if (count > 0) return;
 
-    const demo: DiveRecord[] = [
-      {
-        site: 'BLUE HOLE',
-        depth: 18,
-        time: 42,
-        startPressure: 210,
-        endPressure: 70,
-        cylLiters: 11.1,
-        sac: 17.8,
-        gas: 'EAN32',
-        createdAt: baseDate,
-      },
-      {
-        site: 'REEF DROP',
-        depth: 14,
-        time: 38,
-        startPressure: 210,
-        endPressure: 80,
-        cylLiters: 11.1,
-        sac: 16.2,
-        gas: 'AIR',
-        createdAt: new Date(now.getTime() - 1000 * 60 * 60 * 24).toISOString(),
-      },
-    ];
+  const now = Date.now();
 
-    await db.dives.bulkAdd(demo);
-  }
+  const sample: DiveRecord[] = [
+    {
+      date: '2025-10-12',
+      site: 'BLUE HOLE',
+      location: 'Eleuthera',
+      depthMeters: 18,
+      bottomTimeMin: 42,
+      gas: 'EAN32',
+      sacLpm: 17.8,
+      startBar: 200,
+      endBar: 80,
+      cylinderLiters: 11.1,
+      notes: 'Sample training dive',
+      createdAt: now - 2 * 86400000,
+      updatedAt: now - 2 * 86400000,
+    },
+    {
+      date: '2025-10-10',
+      site: 'REEF DROP',
+      location: 'Eleuthera',
+      depthMeters: 14,
+      bottomTimeMin: 38,
+      gas: 'AIR',
+      sacLpm: 16.2,
+      startBar: 210,
+      endBar: 90,
+      cylinderLiters: 11.1,
+      notes: 'Sample reef dive',
+      createdAt: now - 4 * 86400000,
+      updatedAt: now - 4 * 86400000,
+    },
+  ];
 
-  return db.dives.toArray();
+  await db.dives.bulkAdd(sample);
 }
 
+// ---------------------------------------------------------------------
+// Dives
+// ---------------------------------------------------------------------
 export async function getDives(): Promise<StoredDive[]> {
-  return db.dives.toArray();
+  const list = await db.dives.orderBy('createdAt').reverse().toArray();
+  return list;
 }
 
-export async function addDive(input: {
+export interface NewDiveInput {
+  date: string;
   site: string;
-  depth: number;
-  time: number;
-  startPressure: number;
-  endPressure: number;
-  cylLiters: number;
-  sac: number;
-  gas: string;
-}): Promise<number> {
+  location?: string;
+  depthMeters: number;
+  bottomTimeMin: number;
+  gas: GasKind;
+  sacLpm?: number;
+  startBar?: number;
+  endBar?: number;
+  cylinderLiters?: number;
+  notes?: string;
+}
+
+export async function addDive(input: NewDiveInput): Promise<StoredDive> {
+  const now = Date.now();
   const record: DiveRecord = {
     ...input,
-    createdAt: new Date().toISOString(),
+    createdAt: now,
+    updatedAt: now,
   };
-  return db.dives.add(record);
+  const id = await db.dives.add(record);
+  return { ...record, id };
 }
 
 export async function updateDive(
   id: number,
-  patch: Partial<Omit<DiveRecord, 'id'>>,
-): Promise<number> {
-  return db.dives.update(id, patch);
+  changes: Partial<NewDiveInput>,
+): Promise<void> {
+  await db.dives.update(id, {
+    ...changes,
+    updatedAt: Date.now(),
+  });
 }
 
 export async function deleteDive(id: number): Promise<void> {
   await db.dives.delete(id);
 }
 
-// Diver profile API
-
-export async function getProfile(): Promise<DiverProfile | undefined> {
-  return db.profile.get(1);
+// ---------------------------------------------------------------------
+// Profile
+// ---------------------------------------------------------------------
+export async function getProfile(): Promise<DiverProfile | null> {
+  const profile = await db.profile.get(1);
+  return profile ?? null;
 }
 
-export async function saveProfile(data: {
-  name: string;
-  agency: string;
-  level: string;
-  defaultCylinder: string;
-}): Promise<void> {
-  const profile: DiverProfile = {
+export async function saveProfile(input: ProfileInput): Promise<DiverProfile> {
+  const payload: DiverProfile = {
+    ...input,
     id: 1,
-    name: data.name,
-    agency: data.agency,
-    level: data.level,
-    defaultCylinder: data.defaultCylinder,
+    updatedAt: Date.now(),
   };
-  await db.profile.put(profile);
+  await db.profile.put(payload);
+  return payload;
+}
+
+// ---------------------------------------------------------------------
+// Support
+// ---------------------------------------------------------------------
+export async function saveSupportMessage(
+  input: SupportInput,
+): Promise<SupportMessage> {
+  const payload: SupportMessage = {
+    ...input,
+    deviceInfo: input.includeDevice ? input.deviceInfo : undefined,
+    createdAt: Date.now(),
+    sent: false,
+  };
+  const id = await db.support.add(payload);
+  return { ...payload, id };
 }
