@@ -1,7 +1,6 @@
 {
   "name": "DecoLog - Offline Dive Log HUD",
   "short_name": "DecoLog",
-  "description": "Offline-first dive log with SAC, gas tracking and exports.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#000000",
