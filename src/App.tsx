@@ -10,15 +10,25 @@ import {
   getProfile,
   saveProfile,
   saveSupportMessage,
+  getLicense,
+  saveLicense,
+  setDevProLocal,
+  setDevProCloud,
+  type LicenseState,
+  type SyncConfig,
   type ProfileInput,
   type SupportInput,
+  getSyncConfig,
+  saveSyncConfig,
 } from './storage';
 
 type Tab = 'log' | 'stats' | 'more';
 type Gas = 'AIR' | 'EAN32';
 type Units = 'metric' | 'imperial';
 
-const FREE_LIMIT = 100;
+const FREE_LIMIT = 10;
+const TIER_COPY =
+  'Training: up to 10 dives on this device. Pro: unlimited local storage. Cloud Pro: sync (future).';
 
 // ---------------------------------------------------------------------
 // Helpers
@@ -161,10 +171,10 @@ export default function App() {
     return stored === 'imperial' ? 'imperial' : 'metric';
   });
 
-  const [isPro, setIsPro] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    return window.localStorage.getItem('decolog.pro') === '1';
-  });
+  const [license, setLicense] = useState<LicenseState>(() => getLicense());
+
+  const [syncConfig, setSyncConfig] = useState<SyncConfig>(() => getSyncConfig());
+  const [syncing, setSyncing] = useState(false);
 
   const [form, setForm] = useState<DiveFormState>(emptyDiveForm());
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -228,7 +238,7 @@ export default function App() {
     };
   }, []);
 
-  // persist units + pro flag
+  // persist units
   useEffect(() => {
     if (typeof window !== 'undefined') {
       window.localStorage.setItem('decolog.units', units);
@@ -236,10 +246,11 @@ export default function App() {
   }, [units]);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('decolog.pro', isPro ? '1' : '0');
-    }
-  }, [isPro]);
+    saveLicense(license);
+  }, [license]);
+
+  const isPro = license.tier === 'pro_local' || license.tier === 'pro_cloud';
+  const hasCloudSync = license.tier === 'pro_cloud';
 
   const canAddDive = isPro || dives.length < FREE_LIMIT;
 
@@ -438,6 +449,36 @@ export default function App() {
     }
   }
 
+  function handleDevProLocal() {
+    const next = setDevProLocal();
+    setLicense(next);
+  }
+
+  function handleDevProCloud() {
+    const next = setDevProCloud();
+    setLicense(next);
+  }
+
+  function handleToggleCloudSync(enabled: boolean) {
+    const next = { ...syncConfig, cloudSyncEnabled: enabled };
+    setSyncConfig(next);
+    saveSyncConfig(next);
+  }
+
+  function handleManualSync() {
+    if (syncing || !syncConfig.cloudSyncEnabled) return;
+    setSyncing(true);
+    const pending = { ...syncConfig, lastSyncStatus: 'idle' as const };
+    setSyncConfig(pending);
+    setTimeout(() => {
+      console.log('DecoLog dev sync stub: would sync dives and support messages');
+      const next = { ...pending, lastSyncAt: Date.now(), lastSyncStatus: 'ok' as const };
+      setSyncConfig(next);
+      saveSyncConfig(next);
+      setSyncing(false);
+    }, 1000);
+  }
+
   // -------------------------------------------------------------------
   // Export handlers
   // -------------------------------------------------------------------
@@ -453,7 +494,7 @@ export default function App() {
   function handleExportJson() {
     const payload = {
       meta: {
-        app: 'DecoLog',
+        app: 'Dive Ops HUD',
         exportedAt: new Date().toISOString(),
         count: dives.length,
       },
@@ -515,7 +556,7 @@ export default function App() {
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(12);
-    doc.text('DECOLOG / OFFLINE DIVE LOG', 14, y);
+    doc.text('DIVE OPS HUD // OFFLINE MISSION LOG', 14, y);
     y += 6;
 
     doc.setFont('helvetica', 'normal');
@@ -586,53 +627,57 @@ export default function App() {
   // -------------------------------------------------------------------
   function renderHeader() {
     return (
-      <header className="mb-4 border-b border-emerald-500/40 pb-3">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <div className="inline-flex items-center gap-2 rounded border border-emerald-500/60 bg-zinc-950 px-2 py-1">
-              <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
-              <span className="font-mono text-[11px] tracking-[0.3em] text-emerald-300 uppercase">
-                DCL | MODULE 01
-              </span>
-            </div>
-            <div className="mt-2 flex items-baseline gap-2">
-              <span className="font-mono text-xl tracking-[0.28em] uppercase">
-                DECO<span className="text-emerald-400">LOG</span>
-              </span>
-              <span className="font-mono text-[10px] text-zinc-400 tracking-[0.18em] uppercase">
-                Offline dive log HUD
-              </span>
+      <header className="hud-header mb-5">
+        <div className="hud-strip rounded-lg border border-emerald-500/30">
+          <div className="hud-strip-left">
+            <img src="/decolog-logo.svg" alt="DECOLOG emblem" className="hud-mark h-8 w-auto" />
+            <div className="hud-stamp">
+              <span className="hud-stamp-line">DCL | MODULE 01</span>
+              <span className="hud-stamp-title">DECOLOG</span>
+              <span className="hud-stamp-sub">OFFLINE DIVE LOG HUD</span>
             </div>
           </div>
 
-          <div className="flex flex-col items-end gap-2">
-            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.2em]">
-              <span className="text-zinc-500">UNITS</span>
-              <button
-                type="button"
-                onClick={() => setUnits('metric')}
-                className={`rounded border px-2 py-1 ${
-                  units === 'metric'
-                    ? 'border-emerald-400 bg-emerald-500/10 text-emerald-300'
-                    : 'border-zinc-700 text-zinc-400'
-                }`}
-              >
-                METRIC
-              </button>
-              <button
-                type="button"
-                onClick={() => setUnits('imperial')}
-                className={`rounded border px-2 py-1 ${
-                  units === 'imperial'
-                    ? 'border-emerald-400 bg-emerald-500/10 text-emerald-300'
-                    : 'border-zinc-700 text-zinc-400'
-                }`}
-              >
-                IMPERIAL
-              </button>
+          <div className="hud-strip-right">
+            <div className="hud-telemetry">
+              <div className="hud-status flex items-center gap-3 rounded px-3 py-2">
+                <span className="hud-status-dot" aria-hidden />
+                <div className="flex flex-col leading-tight">
+                  <span className="hud-status-line">UPLINK: READY</span>
+                  <span className="hud-console-line">CONSOLE LINK // LIVE</span>
+                </div>
+              </div>
             </div>
-            <div className="font-mono text-[10px] text-zinc-500 tracking-[0.18em]">
-              {isPro ? 'LICENSE: PRO MODE (UNLOCKED)' : `LICENSE: TRAINING (UP TO ${FREE_LIMIT} DIVES)`}
+
+            <div className="hud-controls">
+              <div className="hud-units">
+                <span className="hud-label">UNITS</span>
+                <button
+                  type="button"
+                  onClick={() => setUnits('metric')}
+                  className={`rounded border px-2 py-1 ${units === 'metric' ? 'is-active' : ''}`}
+                >
+                  METRIC
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUnits('imperial')}
+                  className={`rounded border px-2 py-1 ${units === 'imperial' ? 'is-active' : ''}`}
+                >
+                  IMPERIAL
+                </button>
+              </div>
+              <div className="hud-license">
+                <span className="hud-mode">
+                  MODE //{' '}
+                  {isPro
+                    ? hasCloudSync
+                      ? 'PROTOCOL OPEN // CLOUD READY'
+                      : 'PROTOCOL OPEN'
+                    : 'TRAINING CHANNEL'}
+                </span>
+                <span className="hud-tier">{TIER_COPY}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -642,39 +687,37 @@ export default function App() {
 
   function renderTabs() {
     return (
-      <div className="mb-4 flex gap-2 font-mono text-[11px] uppercase tracking-[0.2em]">
-        {(['log', 'stats', 'more'] as Tab[]).map((t) => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => setTab(t)}
-            className={`flex-1 rounded border px-3 py-2 ${
-              tab === t
-                ? 'border-emerald-500 bg-emerald-500/10 text-emerald-200'
-                : 'border-zinc-700 bg-zinc-950 text-zinc-400 hover:border-emerald-500/60'
-            }`}
-          >
-            {t === 'log' && 'LOG'}
-            {t === 'stats' && 'STATS'}
-            {t === 'more' && 'MORE'}
-          </button>
-        ))}
+      <div className="hud-tabs mb-4">
+        <div className="hud-tabs-bar grid grid-cols-3 gap-2 font-mono text-[11px] uppercase tracking-[0.2em]">
+          {(['log', 'stats', 'more'] as Tab[]).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              className={`hud-tab rounded border px-3 py-2 ${tab === t ? 'is-active' : ''}`}
+            >
+              {t === 'log' && 'LOG'}
+              {t === 'stats' && 'STATS'}
+              {t === 'more' && 'MORE'}
+            </button>
+          ))}
+        </div>
       </div>
     );
   }
 
   function renderLogTab() {
     return (
-      <section className="grid gap-4 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+      <section className="grid gap-5 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         {/* New / edit form */}
-        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
           <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
             {editingId != null ? 'EDIT DIVE' : 'NEW DIVE'}
           </div>
 
           {!canAddDive && editingId == null && (
             <div className="mb-3 rounded border border-amber-500/50 bg-amber-500/10 p-2 font-mono text-[10px] text-amber-300">
-              FREE TIER LIMIT REACHED ({FREE_LIMIT} DIVES). ENABLE PRO MODE IN MORE → LICENSE MODULE.
+              {TIER_COPY} Free tier limit reached.
             </div>
           )}
 
@@ -834,7 +877,7 @@ export default function App() {
                 type="button"
                 disabled={savingDive || (!canAddDive && editingId == null)}
                 onClick={handleSaveDive}
-                className="flex-1 rounded border border-emerald-500 bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200 disabled:border-zinc-700 disabled:text-zinc-500"
+                className="flex-1 rounded border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200 disabled:opacity-60"
               >
                 {editingId != null ? 'UPDATE DIVE' : 'LOG DIVE'}
               </button>
@@ -842,7 +885,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={handleCancelEdit}
-                  className="rounded border border-zinc-700 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-zinc-300"
+                  className="rounded border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-zinc-300"
                 >
                   CANCEL
                 </button>
@@ -852,7 +895,7 @@ export default function App() {
         </div>
 
         {/* Dive list */}
-        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
           <div className="mb-2 flex items-center justify-between">
             <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
               DIVE LOG
@@ -876,10 +919,7 @@ export default function App() {
 
           <div className="flex flex-col gap-2">
             {dives.map((d) => (
-              <div
-                key={d.id}
-                className="rounded border border-zinc-700 bg-zinc-900/60 px-3 py-2 text-[13px]"
-              >
+              <div key={d.id} className="hud-subpanel rounded border px-3 py-2 text-[13px]">
                 <div className="flex items-center justify-between">
                   <div className="font-mono text-[11px] tracking-[0.18em] text-zinc-300">
                     {niceDate(d.date)} // {d.site || 'UNNAMED SITE'}
@@ -918,14 +958,14 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => handleEditDive(d)}
-                    className="rounded border border-zinc-700 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-300"
+                    className="rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-300"
                   >
                     EDIT
                   </button>
                   <button
                     type="button"
                     onClick={() => handleDeleteDive(d.id)}
-                    className="rounded border border-red-500/70 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-red-300"
+                    className="rounded border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-red-300"
                   >
                     DELETE
                   </button>
@@ -945,8 +985,8 @@ export default function App() {
           STATS MODULE
         </div>
 
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="rounded border border-zinc-700 bg-zinc-900/60 p-3">
+        <div className="grid gap-4 md:grid-cols-3">
+          <div className="hud-subpanel rounded border p-3">
             <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-500">
               TOTAL DIVES
             </div>
@@ -958,7 +998,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="rounded border border-zinc-700 bg-zinc-900/60 p-3">
+          <div className="hud-subpanel rounded border p-3">
             <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-500">
               DEPTH / GAS
             </div>
@@ -970,7 +1010,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="rounded border border-zinc-700 bg-zinc-900/60 p-3">
+          <div className="hud-subpanel rounded border p-3">
             <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-500">
               SAC
             </div>
@@ -988,9 +1028,9 @@ export default function App() {
 
   function renderMoreTab() {
     return (
-      <section className="flex flex-col gap-4">
+      <section className="flex flex-col gap-5">
         {/* Diver profile */}
-        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
           <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
             DIVER PROFILE
           </div>
@@ -1137,7 +1177,7 @@ export default function App() {
         </div>
 
         {/* Support */}
-        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
           <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
             SUPPORT / CONTACT
           </div>
@@ -1179,7 +1219,7 @@ export default function App() {
 
             <div className="mt-1 flex items-center justify-between">
               <div className="max-w-md font-mono text-[9px] text-zinc-500">
-                Messages are stored locally in DecoLog for now. Sync / send-out will be wired later.
+                Messages are stored locally in this HUD for now. Sync / send-out will be wired later.
               </div>
               <button
                 type="button"
@@ -1194,55 +1234,73 @@ export default function App() {
         </div>
 
         {/* License + Export */}
-        <div className="grid gap-4 md:grid-cols-[minmax(0,1.4fr)_minmax(0,2fr)]">
+        <div className="grid gap-5 md:grid-cols-[minmax(0,1.4fr)_minmax(0,2fr)]">
           {/* License module */}
-          <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+          <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
             <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
               LICENSE MODULE
             </div>
-            <div className="font-mono text-[11px] text-zinc-300">
-              CURRENT MODE:{' '}
-              <span className={isPro ? 'text-emerald-300' : 'text-amber-300'}>
-                {isPro ? 'PRO (UNLOCKED)' : 'TRAINING'}
-              </span>
+            <div className="hud-license items-start text-left">
+              <div className="hud-mode">
+                MODE:{' '}
+                {license.tier === 'training'
+                  ? 'TRAINING'
+                  : license.tier === 'pro_local'
+                    ? 'PRO / LOCAL'
+                    : 'PRO / CLOUD SYNC'}
+              </div>
+              <div className="hud-tier-copy">{TIER_COPY}</div>
             </div>
-            <div className="mt-1 font-mono text-[10px] text-zinc-500">
-              Training: up to {FREE_LIMIT} dives on this device. Pro: unlimited local storage.
+            <div className="mt-1 rounded border border-dashed border-emerald-500/60 bg-zinc-900/60 p-2 font-mono text-[10px] uppercase tracking-[0.14em] text-emerald-200">
+              Dev payment stubs
             </div>
-            <div className="mt-3">
+            <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() => setIsPro((prev) => !prev)}
-                className="rounded border border-zinc-700 bg-zinc-900 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-zinc-300"
+                onClick={handleDevProLocal}
+                className="rounded border bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200"
               >
-                TOGGLE PRO MODE (DEV SWITCH)
+                DEV: Simulate one-time unlock (Pro Local)
               </button>
+              <button
+                type="button"
+                onClick={handleDevProCloud}
+                className="rounded border bg-sky-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-sky-200"
+              >
+                DEV: Simulate cloud sync subscription (Pro Cloud)
+              </button>
+            </div>
+            <div className="mt-2 font-mono text-[10px] text-zinc-500">
+              Activated:{' '}
+              {license.activatedAt
+                ? new Date(license.activatedAt).toLocaleString()
+                : 'not set (training)'}
             </div>
           </div>
 
           {/* Export module */}
-          <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-3">
+          <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
             <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
               EXPORT MODULE
             </div>
 
             <div className="export-keys flex flex-wrap gap-2">
               <button
-                className="export-key-btn border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
+                className="export-key-btn rounded border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
                 onClick={handleExportJson}
               >
                 EXPORT JSON
               </button>
 
               <button
-                className="export-key-btn border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
+                className="export-key-btn rounded border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
                 onClick={handleExportCsv}
               >
                 EXPORT CSV
               </button>
 
               <button
-                className="export-key-btn border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
+                className="export-key-btn rounded border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
                 onClick={handleExportPdf}
               >
                 EXPORT PDF
@@ -1250,8 +1308,48 @@ export default function App() {
             </div>
 
             <div className="mt-3 font-mono text-[10px] text-zinc-500">
-              Branded as <span className="text-emerald-300">DECOLOG</span> with key dive metrics for
-              audits / backups.
+              Branded as <span className="text-emerald-300">DIVE OPS HUD</span> with key dive
+              metrics for mission audits / backups.
+            </div>
+          </div>
+        </div>
+
+        {/* Cloud sync config (stub) */}
+        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
+          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+            CLOUD SYNC (DEV STUB)
+          </div>
+          <div className="grid gap-3 text-[13px]">
+            <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-400">
+              <input
+                type="checkbox"
+                className="h-3 w-3 border border-zinc-600 bg-zinc-900 accent-emerald-500"
+                checked={syncConfig.cloudSyncEnabled}
+                disabled={!hasCloudSync}
+                onChange={(e) => handleToggleCloudSync(e.target.checked)}
+              />
+              Enable cloud sync (requires Cloud Pro)
+            </label>
+            <div className="font-mono text-[10px] text-zinc-500">
+              Status: {syncConfig.lastSyncStatus.toUpperCase()}{' '}
+              {syncing ? '(running...)' : ''}
+            </div>
+            <div className="font-mono text-[10px] text-zinc-500">
+              Last sync:{' '}
+              {syncConfig.lastSyncAt
+                ? new Date(syncConfig.lastSyncAt).toLocaleString()
+                : 'never'}
+            </div>
+            <button
+              type="button"
+              disabled={!syncConfig.cloudSyncEnabled || syncing || !hasCloudSync}
+              onClick={handleManualSync}
+              className="rounded border border-emerald-500 bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200 disabled:border-zinc-700 disabled:text-zinc-500"
+            >
+              SYNC NOW (LOCAL STUB)
+            </button>
+            <div className="font-mono text-[10px] text-zinc-500">
+              Local-only stub — waits ~1s, logs to console, and marks sync OK.
             </div>
           </div>
         </div>
@@ -1263,8 +1361,8 @@ export default function App() {
   // Main render
   // -------------------------------------------------------------------
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <main className="mx-auto max-w-5xl px-3 py-4 md:py-6">
+    <div className="app-frame min-h-screen text-zinc-100">
+      <main className="mx-auto max-w-5xl space-y-5 px-3 py-5 md:space-y-6 md:py-7">
         {renderHeader()}
         {renderTabs()}
         {tab === 'log' && renderLogTab()}
