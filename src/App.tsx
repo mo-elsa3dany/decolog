@@ -27,6 +27,8 @@ type Units = 'metric' | 'imperial';
 const FREE_LIMIT = 10;
 const TIER_COPY =
   'Training: up to 10 dives on this device. Pro: unlimited local storage. Cloud Pro: sync (future).';
+const STRIPE_PRICE_PRO = import.meta.env.VITE_STRIPE_PRICE_PRO;
+const STRIPE_PRICE_CLOUD = import.meta.env.VITE_STRIPE_PRICE_CLOUD;
 
 // ---------------------------------------------------------------------
 // Helpers
@@ -160,9 +162,9 @@ function emptyProfile(): ProfileState {
 // ---------------------------------------------------------------------
 export default function App() {
   async function startCheckout(priceId: string) {
-    const res = await fetch("/api/create-checkout-session", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    const res = await fetch('/api/create-checkout-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ priceId }),
     });
 
@@ -171,8 +173,16 @@ export default function App() {
     if (data.url) {
       window.location.href = data.url;
     } else {
-      alert("Stripe error: " + (data.error || "Unknown error"));
+      alert('Stripe error: ' + (data.error || 'Unknown error'));
     }
+  }
+
+  function handleCheckout(priceId?: string) {
+    if (!priceId) {
+      alert('Stripe price is not configured.');
+      return;
+    }
+    startCheckout(priceId);
   }
 
   const [tab, setTab] = useState<Tab>('log');
@@ -200,6 +210,7 @@ export default function App() {
   const [supportMessage, setSupportMessage] = useState('');
   const [supportIncludeDevice, setSupportIncludeDevice] = useState(true);
   const [supportSaving, setSupportSaving] = useState(false);
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
 
   // seed + load dives on first mount
   useEffect(() => {
@@ -1034,8 +1045,187 @@ export default function App() {
   }
 
   function renderMoreTab() {
+    const currentModeLabel =
+      license.tier === 'training'
+        ? 'Training'
+        : license.tier === 'pro_cloud'
+          ? 'Cloud Pro'
+          : 'Pro';
+
     return (
       <section className="flex flex-col gap-5">
+        {/* License & upgrades */}
+        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
+          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+            LICENSE & UPGRADES
+          </div>
+
+          <div className="space-y-1 text-[13px] text-zinc-200">
+            <div>Training: up to {FREE_LIMIT} local dives on this device.</div>
+            <div>Pro: unlimited local storage on this device.</div>
+            <div>Cloud Pro: future cloud sync across devices (coming later).</div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => handleCheckout(STRIPE_PRICE_PRO)}
+              className="rounded border bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200"
+            >
+              Unlock Pro
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleCheckout(STRIPE_PRICE_CLOUD)}
+              className="rounded border bg-sky-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-sky-200"
+            >
+              Subscribe Cloud
+            </button>
+          </div>
+
+          <div className="mt-3 space-y-1 font-mono text-[10px] text-emerald-200 tracking-[0.18em]">
+            <div>Current mode: {currentModeLabel}</div>
+            <div className="text-zinc-500">
+              {license.activatedAt
+                ? `Activated: ${new Date(license.activatedAt).toLocaleString()}`
+                : 'Activation pending while in training.'}
+            </div>
+          </div>
+        </div>
+
+        {/* Export module */}
+        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
+          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+            EXPORT & BACKUP
+          </div>
+
+          <div className="export-keys flex flex-wrap gap-2">
+            <button
+              className="export-key-btn rounded border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
+              onClick={handleExportJson}
+            >
+              EXPORT JSON
+            </button>
+
+            <button
+              className="export-key-btn rounded border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
+              onClick={handleExportCsv}
+            >
+              EXPORT CSV
+            </button>
+
+            <button
+              className="export-key-btn rounded border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
+              onClick={handleExportPdf}
+            >
+              EXPORT PDF
+            </button>
+          </div>
+
+          <div className="mt-3 font-mono text-[10px] text-zinc-500">
+            Quick backups: JSON/CSV for data reuse, PDF keeps the DIVE OPS HUD header for sharing.
+          </div>
+        </div>
+
+        {/* Cloud sync config (stub) */}
+        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
+          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+            CLOUD SYNC (DEV STUB)
+          </div>
+          <div className="grid gap-3 text-[13px]">
+            <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-400">
+              <input
+                type="checkbox"
+                className="h-3 w-3 border border-zinc-600 bg-zinc-900 accent-emerald-500"
+                checked={syncConfig.cloudSyncEnabled}
+                disabled={!hasCloudSync}
+                onChange={(e) => handleToggleCloudSync(e.target.checked)}
+              />
+              Enable cloud sync (requires Cloud Pro)
+            </label>
+            <div className="font-mono text-[10px] text-zinc-500">
+              Status: {syncConfig.lastSyncStatus.toUpperCase()}{' '}
+              {syncing ? '(running...)' : ''}
+            </div>
+            <div className="font-mono text-[10px] text-zinc-500">
+              Last sync:{' '}
+              {syncConfig.lastSyncAt
+                ? new Date(syncConfig.lastSyncAt).toLocaleString()
+                : 'never'}
+            </div>
+            <button
+              type="button"
+              disabled={!syncConfig.cloudSyncEnabled || syncing || !hasCloudSync}
+              onClick={handleManualSync}
+              className="rounded border border-emerald-500 bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200 disabled:border-zinc-700 disabled:text-zinc-500"
+            >
+              SYNC NOW (LOCAL STUB)
+            </button>
+            <div className="font-mono text-[10px] text-zinc-500">
+              Local-only dev stub — waits ~1s, logs to console, and marks sync OK. Real cloud sync
+              ships with Cloud Pro.
+            </div>
+          </div>
+        </div>
+
+        {/* Support */}
+        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
+          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+            SUPPORT / CONTACT
+          </div>
+
+          <div className="grid gap-2 text-[13px]">
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Subject
+              </span>
+              <input
+                type="text"
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={supportSubject}
+                onChange={(e) => setSupportSubject(e.target.value)}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                Message
+              </span>
+              <textarea
+                rows={4}
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                value={supportMessage}
+                onChange={(e) => setSupportMessage(e.target.value)}
+              />
+            </label>
+
+            <label className="mt-1 flex items-center gap-2 font-mono text-[10px] text-zinc-400">
+              <input
+                type="checkbox"
+                className="h-3 w-3 border border-zinc-600 bg-zinc-900 accent-emerald-500"
+                checked={supportIncludeDevice}
+                onChange={(e) => setSupportIncludeDevice(e.target.checked)}
+              />
+              Include anonymous device info (helps debugging)
+            </label>
+
+            <div className="mt-1 flex items-center justify-between">
+              <div className="max-w-md font-mono text-[9px] text-zinc-500">
+                Messages are stored locally for now. Send-out will be wired alongside cloud sync.
+              </div>
+              <button
+                type="button"
+                disabled={supportSaving}
+                onClick={handleSaveSupport}
+                className="rounded border border-emerald-500 bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200 disabled:border-zinc-700 disabled:text-zinc-500"
+              >
+                SAVE MESSAGE
+              </button>
+            </div>
+          </div>
+        </div>
+
         {/* Diver profile */}
         <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
           <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
@@ -1183,192 +1373,31 @@ export default function App() {
           </div>
         </div>
 
-        {/* Export module */}
-        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
-          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
-            EXPORT MODULE
-          </div>
-
-          <div className="export-keys flex flex-wrap gap-2">
-            <button
-              className="export-key-btn rounded border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
-              onClick={handleExportJson}
-            >
-              EXPORT JSON
-            </button>
-
-            <button
-              className="export-key-btn rounded border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
-              onClick={handleExportCsv}
-            >
-              EXPORT CSV
-            </button>
-
-            <button
-              className="export-key-btn rounded border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
-              onClick={handleExportPdf}
-            >
-              EXPORT PDF
-            </button>
-          </div>
-
-          <div className="mt-3 font-mono text-[10px] text-zinc-500">
-            Branded as <span className="text-emerald-300">DIVE OPS HUD</span> with key dive
-            metrics for mission audits / backups.
-          </div>
-        </div>
-
-        {/* Cloud sync config (stub) */}
-        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
-          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
-            CLOUD SYNC (DEV STUB)
-          </div>
-          <div className="grid gap-3 text-[13px]">
-            <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-400">
-              <input
-                type="checkbox"
-                className="h-3 w-3 border border-zinc-600 bg-zinc-900 accent-emerald-500"
-                checked={syncConfig.cloudSyncEnabled}
-                disabled={!hasCloudSync}
-                onChange={(e) => handleToggleCloudSync(e.target.checked)}
-              />
-              Enable cloud sync (requires Cloud Pro)
-            </label>
-            <div className="font-mono text-[10px] text-zinc-500">
-              Status: {syncConfig.lastSyncStatus.toUpperCase()}{' '}
-              {syncing ? '(running...)' : ''}
-            </div>
-            <div className="font-mono text-[10px] text-zinc-500">
-              Last sync:{' '}
-              {syncConfig.lastSyncAt
-                ? new Date(syncConfig.lastSyncAt).toLocaleString()
-                : 'never'}
-            </div>
-            <button
-              type="button"
-              disabled={!syncConfig.cloudSyncEnabled || syncing || !hasCloudSync}
-              onClick={handleManualSync}
-              className="rounded border border-emerald-500 bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200 disabled:border-zinc-700 disabled:text-zinc-500"
-            >
-              SYNC NOW (LOCAL STUB)
-            </button>
-            <div className="font-mono text-[10px] text-zinc-500">
-              Local-only stub — waits ~1s, logs to console, and marks sync OK.
-            </div>
-          </div>
-        </div>
-
-        {/* License */}
-        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
-          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
-            LICENSE MODULE
-          </div>
-          <div className="hud-license items-start text-left">
-            <div className="hud-mode">
-              MODE:{' '}
-              {license.tier === 'training'
-                ? 'TRAINING'
-                : license.tier === 'pro_local'
-                  ? 'PRO / LOCAL'
-                  : 'PRO / CLOUD SYNC'}
-            </div>
-            <div className="hud-tier-copy">{TIER_COPY}</div>
-          </div>
-          <div className="mt-2 font-mono text-[10px] text-zinc-500">
-            Activated:{' '}
-            {license.activatedAt
-              ? new Date(license.activatedAt).toLocaleString()
-              : 'not set (training)'}
-          </div>
-
-          <details className="group mt-3">
-            <summary className="flex cursor-pointer items-center justify-between font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
-              <span>DEVELOPER</span>
-              <span className="text-[9px] text-zinc-400 group-open:hidden">Open</span>
-              <span className="hidden text-[9px] text-zinc-400 group-open:inline">Close</span>
-            </summary>
-            <div className="mt-3 space-y-3">
-              <div className="rounded border border-dashed border-emerald-500/60 bg-zinc-900/60 p-2 font-mono text-[10px] uppercase tracking-[0.14em] text-emerald-200">
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => startCheckout("price_1SXBv2BFxf1UhZeu5nPE2rNA")}
-                    className="rounded border bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200"
-                  >
-                    Unlock Pro
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => startCheckout("price_1SXBvGBFxf1UhZeuyRDwjjdb")}
-                    className="rounded border bg-sky-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-sky-200"
-                  >
-                    Subscribe Cloud
-                  </button>
-                </div>
-              </div>
-            </div>
-          </details>
-        </div>
-
-        {/* Support */}
-        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
-          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
-            SUPPORT / CONTACT
-          </div>
-
-          <div className="grid gap-2 text-[13px]">
-            <label className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                Subject
-              </span>
-              <input
-                type="text"
-                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
-                value={supportSubject}
-                onChange={(e) => setSupportSubject(e.target.value)}
-              />
-            </label>
-
-            <label className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                Message
-              </span>
-              <textarea
-                rows={4}
-                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
-                value={supportMessage}
-                onChange={(e) => setSupportMessage(e.target.value)}
-              />
-            </label>
-
-            <label className="mt-1 flex items-center gap-2 font-mono text-[10px] text-zinc-400">
-              <input
-                type="checkbox"
-                className="h-3 w-3 border border-zinc-600 bg-zinc-900 accent-emerald-500"
-                checked={supportIncludeDevice}
-                onChange={(e) => setSupportIncludeDevice(e.target.checked)}
-              />
-              Include anonymous device info (helps debugging)
-            </label>
-
-            <div className="mt-1 flex items-center justify-between">
-              <div className="max-w-md font-mono text-[9px] text-zinc-500">
-                Messages are stored locally in this HUD for now. Sync / send-out will be wired later.
-              </div>
-              <button
-                type="button"
-                disabled={supportSaving}
-                onClick={handleSaveSupport}
-                className="rounded border border-emerald-500 bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200 disabled:border-zinc-700 disabled:text-zinc-500"
-              >
-                SAVE MESSAGE
-              </button>
-            </div>
-          </div>
-        </div>
-
       </section>
+    );
+  }
+
+  if (pathname === '/success') {
+    return (
+      <div className="app-frame min-h-screen text-zinc-100">
+        <main className="mx-auto max-w-5xl space-y-5 px-3 py-5 md:space-y-6 md:py-7">
+          <div className="hud-subpanel rounded border border-emerald-500/60 bg-emerald-500/10 px-4 py-6 text-center text-lg text-emerald-200">
+            ✅ Payment successful
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (pathname === '/cancel') {
+    return (
+      <div className="app-frame min-h-screen text-zinc-100">
+        <main className="mx-auto max-w-5xl space-y-5 px-3 py-5 md:space-y-6 md:py-7">
+          <div className="hud-subpanel rounded border border-amber-500/60 bg-amber-500/10 px-4 py-6 text-center text-lg text-amber-200">
+            ❌ Payment cancelled
+          </div>
+        </main>
+      </div>
     );
   }
 
