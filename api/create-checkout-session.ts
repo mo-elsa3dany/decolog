@@ -9,19 +9,19 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { priceId } = req.body;
+  const { priceId } = req.body as { priceId?: string };
 
   if (!priceId) {
     return res.status(400).json({ error: 'Missing priceId' });
   }
 
-  // Decide mode based on which price the user clicked
-  const isSubscription =
-    priceId === process.env.VITE_STRIPE_PRICE_CLOUD;
-
   try {
+    const price = await stripe.prices.retrieve(priceId);
+    const mode: Stripe.Checkout.SessionCreateParams.Mode =
+      price.recurring != null ? 'subscription' : 'payment';
+
     const session = await stripe.checkout.sessions.create({
-      mode: isSubscription ? 'subscription' : 'payment',
+      mode,
       line_items: [
         {
           price: priceId,
