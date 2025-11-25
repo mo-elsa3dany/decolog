@@ -1,21 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import jsPDF from 'jspdf';
-
-// Stripe Checkout (frontend only)
-const STRIPE_PUBLIC_KEY = import.meta.env.VITE_STRIPE_PUBLIC_KEY;
-const STRIPE_PRICE_PRO = import.meta.env.VITE_STRIPE_PRICE_PRO;
-const STRIPE_PRICE_CLOUD = import.meta.env.VITE_STRIPE_PRICE_CLOUD;
-
-function startCheckout(priceId: string) {
-  if (!STRIPE_PUBLIC_KEY) {
-    alert('Stripe key missing. Check .env file.');
-    return;
-  }
-
-  const url = 'https://buy.stripe.com/test_' + priceId;
-  window.open(url, '_blank');
-}
-
 import {
   seedIfEmpty,
   getDives,
@@ -28,8 +12,6 @@ import {
   saveSupportMessage,
   getLicense,
   saveLicense,
-  setDevProLocal,
-  setDevProCloud,
   type LicenseState,
   type SyncConfig,
   type ProfileInput,
@@ -176,7 +158,8 @@ function emptyProfile(): ProfileState {
 // ---------------------------------------------------------------------
 // Main App
 // ---------------------------------------------------------------------
-export default function App() {  async function startCheckout(priceId: string) {
+export default function App() {
+  async function startCheckout(priceId: string) {
     const res = await fetch("/api/create-checkout-session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -202,8 +185,7 @@ export default function App() {  async function startCheckout(priceId: string) {
     return stored === 'imperial' ? 'imperial' : 'metric';
   });
 
-  const [license, setLicense] = useState<LicenseState>(() => getLicense());
-
+  const [license] = useState<LicenseState>(() => getLicense());
   const [syncConfig, setSyncConfig] = useState<SyncConfig>(() => getSyncConfig());
   const [syncing, setSyncing] = useState(false);
 
@@ -475,19 +457,9 @@ export default function App() {  async function startCheckout(priceId: string) {
       await saveSupportMessage(payload);
       setSupportSubject('');
       setSupportMessage('');
-    } finally {
-      setSupportSaving(false);
-    }
+  } finally {
+    setSupportSaving(false);
   }
-
-  function handleDevProLocal() {
-    const next = setDevProLocal();
-    setLicense(next);
-  }
-
-  function handleDevProCloud() {
-    const next = setDevProCloud();
-    setLicense(next);
   }
 
   function handleToggleCloudSync(enabled: boolean) {
@@ -1317,26 +1289,24 @@ export default function App() {  async function startCheckout(priceId: string) {
             </summary>
             <div className="mt-3 space-y-3">
               <div className="rounded border border-dashed border-emerald-500/60 bg-zinc-900/60 p-2 font-mono text-[10px] uppercase tracking-[0.14em] text-emerald-200">
-                Dev payment stubs
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => startCheckout("price_1SXBv2BFxf1UhZeu5nPE2rNA")}
+                    className="rounded border bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200"
+                  >
+                    Unlock Pro
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => startCheckout("price_1SXBvGBFxf1UhZeuyRDwjjdb")}
+                    className="rounded border bg-sky-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-sky-200"
+                  >
+                    Subscribe Cloud
+                  </button>
+                </div>
               </div>
-              <div className="flex flex-wrap gap-2">
-  <button
-    type="button"
-    onClick={() => startCheckout("price_1SXBv2BFxf1UhZeu5nPE2rNA")}
-    className="rounded border bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200"
-  >
-    Unlock Pro
-  </button>
-
-  <button
-    type="button"
-    onClick={() => startCheckout("price_1SXBvGBFxf1UhZeuyRDwjjdb")}
-    className="rounded border bg-sky-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-sky-200"
-  >
-    Subscribe Cloud
-  </button>
-</div>
-
             </div>
           </details>
         </div>
