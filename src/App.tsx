@@ -1,5 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import jsPDF from 'jspdf';
+
+// Stripe Checkout (frontend only)
+const STRIPE_PUBLIC_KEY = import.meta.env.VITE_STRIPE_PUBLIC_KEY;
+const STRIPE_PRICE_PRO = import.meta.env.VITE_STRIPE_PRICE_PRO;
+const STRIPE_PRICE_CLOUD = import.meta.env.VITE_STRIPE_PRICE_CLOUD;
+
+function startCheckout(priceId: string) {
+  if (!STRIPE_PUBLIC_KEY) {
+    alert('Stripe key missing. Check .env file.');
+    return;
+  }
+
+  const url = 'https://buy.stripe.com/test_' + priceId;
+  window.open(url, '_blank');
+}
+
 import {
   seedIfEmpty,
   getDives,
