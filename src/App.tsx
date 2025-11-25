@@ -160,7 +160,22 @@ function emptyProfile(): ProfileState {
 // ---------------------------------------------------------------------
 // Main App
 // ---------------------------------------------------------------------
-export default function App() {
+export default function App() {  async function startCheckout(priceId: string) {
+    const res = await fetch("/api/create-checkout-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ priceId }),
+    });
+
+    const data = await res.json();
+
+    if (data.url) {
+      window.location.href = data.url;
+    } else {
+      alert("Stripe error: " + (data.error || "Unknown error"));
+    }
+  }
+
   const [tab, setTab] = useState<Tab>('log');
   const [dives, setDives] = useState<StoredDive[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1289,21 +1304,23 @@ export default function App() {
                 Dev payment stubs
               </div>
               <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={handleDevProLocal}
-                  className="rounded border bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200"
-                >
-                  DEV: Simulate one-time unlock (Pro Local)
-                </button>
-                <button
-                  type="button"
-                  onClick={handleDevProCloud}
-                  className="rounded border bg-sky-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-sky-200"
-                >
-                  DEV: Simulate cloud sync subscription (Pro Cloud)
-                </button>
-              </div>
+  <button
+    type="button"
+    onClick={() => startCheckout("price_1SXBv2BFxf1UhZeu5nPE2rNA")}
+    className="rounded border bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200"
+  >
+    Unlock Pro
+  </button>
+
+  <button
+    type="button"
+    onClick={() => startCheckout("price_1SXBvGBFxf1UhZeuyRDwjjdb")}
+    className="rounded border bg-sky-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-sky-200"
+  >
+    Subscribe Cloud
+  </button>
+</div>
+
             </div>
           </details>
         </div>

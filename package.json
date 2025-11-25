@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@stripe/stripe-js": "^8.5.3",
     "dexie": "^4.2.1",
     "jspdf": "^3.0.4",
     "react": "^19.2.0",
