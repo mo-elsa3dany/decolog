@@ -154,49 +154,6 @@ export async function saveSupportMessage(
 }
 
 // ---------------------------------------------------------------------
-// License (localStorage only)
-// ---------------------------------------------------------------------
-export type LicenseTier = 'training' | 'pro_local' | 'pro_cloud';
-export interface LicenseState {
-  tier: LicenseTier;
-  activatedAt?: number;
-}
-
-const LICENSE_KEY = 'decolog.license';
-
-export function getLicense(): LicenseState {
-  if (typeof window === 'undefined') {
-    return { tier: 'training' };
-  }
-  try {
-    const raw = window.localStorage.getItem(LICENSE_KEY);
-    if (!raw) return { tier: 'training' };
-    const parsed = JSON.parse(raw) as LicenseState;
-    if (!parsed || !parsed.tier) return { tier: 'training' };
-    return parsed;
-  } catch {
-    return { tier: 'training' };
-  }
-}
-
-export function saveLicense(next: LicenseState) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(LICENSE_KEY, JSON.stringify(next));
-}
-
-export function setDevProLocal(): LicenseState {
-  const next: LicenseState = { tier: 'pro_local', activatedAt: Date.now() };
-  saveLicense(next);
-  return next;
-}
-
-export function setDevProCloud(): LicenseState {
-  const next: LicenseState = { tier: 'pro_cloud', activatedAt: Date.now() };
-  saveLicense(next);
-  return next;
-}
-
-// ---------------------------------------------------------------------
 // Cloud sync config (local only stub)
 // ---------------------------------------------------------------------
 export type SyncStatus = 'idle' | 'ok' | 'error';

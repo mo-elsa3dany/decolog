@@ -10,25 +10,22 @@ import {
   getProfile,
   saveProfile,
   saveSupportMessage,
-  getLicense,
-  saveLicense,
-  type LicenseState,
   type SyncConfig,
   type ProfileInput,
   type SupportInput,
   getSyncConfig,
   saveSyncConfig,
 } from './storage';
+import { loadLicense, saveLicense, setLicenseMode, type LicenseState } from './state/license';
+import { appBaseUrl, stripePriceCloud, stripePricePro, stripePublishableKey } from './config/stripe';
 
 type Tab = 'log' | 'stats' | 'more';
 type Gas = 'AIR' | 'EAN32';
 type Units = 'metric' | 'imperial';
 
 const FREE_LIMIT = 10;
-const TIER_COPY =
-  'Training: up to 10 dives on this device. Pro: unlimited local storage. Cloud Pro: sync (future).';
-const STRIPE_PRICE_PRO = import.meta.env.VITE_STRIPE_PRICE_PRO;
-const STRIPE_PRICE_CLOUD = import.meta.env.VITE_STRIPE_PRICE_CLOUD;
+const LICENSE_COPY =
+  'Training: up to 10 dives on this device. Pro: unlimited local storage. Cloud Pro: sync (coming soon).';
 
 // ---------------------------------------------------------------------
 // Helpers
@@ -161,30 +158,28 @@ function emptyProfile(): ProfileState {
 // Main App
 // ---------------------------------------------------------------------
 export default function App() {
-  async function startCheckout(priceId: string) {
-    const res = await fetch('/api/create-checkout-session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ priceId }),
-    });
+  async function handleCheckout(mode: 'pro' | 'cloud') {
+    try {
+      const res = await fetch('/api/create-checkout-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
 
-    const data = await res.json();
+      const data = (await res.json()) as { url?: string; error?: string };
 
-    if (data.url) {
+      if (!res.ok || !data.url) {
+        throw new Error(data.error || 'Checkout session could not be created.');
+      }
+
       window.location.href = data.url;
-    } else {
-      alert('Stripe error: ' + (data.error || 'Unknown error'));
+    } catch (error) {
+      console.error('Checkout failed', error);
+      alert('Checkout failed. Please try again or contact support.');
     }
   }
 
-  function handleCheckout(priceId?: string) {
-    if (!priceId) {
-      alert('Stripe price is not configured.');
-      return;
-    }
-    startCheckout(priceId);
-  }
-
+  const stripeEnvReady = Boolean(stripePublishableKey && stripePricePro && stripePriceCloud && appBaseUrl);
   const [tab, setTab] = useState<Tab>('log');
   const [dives, setDives] = useState<StoredDive[]>([]);
   const [loading, setLoading] = useState(true);
@@ -195,9 +190,10 @@ export default function App() {
     return stored === 'imperial' ? 'imperial' : 'metric';
   });
 
-  const [license] = useState<LicenseState>(() => getLicense());
+  const [license, setLicense] = useState<LicenseState>(() => loadLicense());
   const [syncConfig, setSyncConfig] = useState<SyncConfig>(() => getSyncConfig());
   const [syncing, setSyncing] = useState(false);
+  const [checkoutStatus, setCheckoutStatus] = useState<'success' | 'cancel' | null>(null);
 
   const [form, setForm] = useState<DiveFormState>(emptyDiveForm());
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -210,7 +206,6 @@ export default function App() {
   const [supportMessage, setSupportMessage] = useState('');
   const [supportIncludeDevice, setSupportIncludeDevice] = useState(true);
   const [supportSaving, setSupportSaving] = useState(false);
-  const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
 
   // seed + load dives on first mount
   useEffect(() => {
@@ -273,10 +268,35 @@ export default function App() {
     saveLicense(license);
   }, [license]);
 
-  const isPro = license.tier === 'pro_local' || license.tier === 'pro_cloud';
-  const hasCloudSync = license.tier === 'pro_cloud';
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const checkout = params.get('checkout');
+    const mode = params.get('mode');
+    const normalizedMode = mode === 'pro' || mode === 'cloud' ? mode : null;
 
-  const canAddDive = isPro || dives.length < FREE_LIMIT;
+    if (checkout === 'success' && normalizedMode) {
+      setLicense((prev) => setLicenseMode(normalizedMode, prev));
+      setCheckoutStatus('success');
+    } else if (checkout === 'cancel') {
+      setCheckoutStatus('cancel');
+    }
+
+    if (checkout) {
+      params.delete('checkout');
+      params.delete('mode');
+      params.delete('session_id');
+      const nextSearch = params.toString();
+      const nextUrl = nextSearch ? `${window.location.pathname}?${nextSearch}` : window.location.pathname;
+      window.history.replaceState({}, '', nextUrl);
+    }
+  }, []);
+
+  const isTraining = license.mode === 'training';
+  const isPro = license.mode === 'pro' || license.mode === 'cloud';
+  const hasCloudSync = license.mode === 'cloud';
+
+  const canAddDive = isTraining ? dives.length < FREE_LIMIT : true;
 
   // stats
   const stats = useMemo(() => {
@@ -468,19 +488,20 @@ export default function App() {
       await saveSupportMessage(payload);
       setSupportSubject('');
       setSupportMessage('');
-  } finally {
-    setSupportSaving(false);
-  }
+    } finally {
+      setSupportSaving(false);
+    }
   }
 
   function handleToggleCloudSync(enabled: boolean) {
+    if (!hasCloudSync) return;
     const next = { ...syncConfig, cloudSyncEnabled: enabled };
     setSyncConfig(next);
     saveSyncConfig(next);
   }
 
   function handleManualSync() {
-    if (syncing || !syncConfig.cloudSyncEnabled) return;
+    if (syncing || !syncConfig.cloudSyncEnabled || !hasCloudSync) return;
     setSyncing(true);
     const pending = { ...syncConfig, lastSyncStatus: 'idle' as const };
     setSyncConfig(pending);
@@ -690,11 +711,11 @@ export default function App() {
                   MODE //{' '}
                   {isPro
                     ? hasCloudSync
-                      ? 'PROTOCOL OPEN // CLOUD READY'
-                      : 'PROTOCOL OPEN'
+                      ? 'CLOUD PRO // PROTOCOL OPEN'
+                      : 'PRO // PROTOCOL OPEN'
                     : 'TRAINING CHANNEL'}
                 </span>
-                <span className="hud-tier">{TIER_COPY}</span>
+                <span className="hud-tier">{LICENSE_COPY}</span>
               </div>
             </div>
           </div>
@@ -735,7 +756,7 @@ export default function App() {
 
           {!canAddDive && editingId == null && (
             <div className="mb-3 rounded border border-amber-500/50 bg-amber-500/10 p-2 font-mono text-[10px] text-amber-300">
-              {TIER_COPY} Free tier limit reached.
+              {LICENSE_COPY} Free tier limit reached.
             </div>
           )}
 
@@ -1046,11 +1067,9 @@ export default function App() {
 
   function renderMoreTab() {
     const currentModeLabel =
-      license.tier === 'training'
-        ? 'Training'
-        : license.tier === 'pro_cloud'
-          ? 'Cloud Pro'
-          : 'Pro';
+      license.mode === 'training' ? 'Training' : license.mode === 'cloud' ? 'Cloud Pro' : 'Pro';
+    const proDisabled = license.mode !== 'training' || !stripeEnvReady;
+    const cloudDisabled = license.mode === 'cloud' || !stripeEnvReady;
 
     return (
       <section className="flex flex-col gap-5">
@@ -1060,32 +1079,66 @@ export default function App() {
             LICENSE & UPGRADES
           </div>
 
-          <div className="space-y-1 text-[13px] text-zinc-200">
+          {!stripeEnvReady && (
+            <div className="mb-3 rounded border border-amber-500/50 bg-amber-500/10 px-3 py-2 font-mono text-[10px] text-amber-200 tracking-[0.16em]">
+              Stripe config missing (publishable key / price IDs). Buttons disabled until set.
+            </div>
+          )}
+
+          {checkoutStatus === 'success' && (
+            <div className="mb-3 rounded border border-emerald-500/50 bg-emerald-500/10 px-3 py-2 font-mono text-[10px] text-emerald-200 tracking-[0.16em]">
+              Checkout complete — license updated.
+            </div>
+          )}
+
+          {checkoutStatus === 'cancel' && (
+            <div className="mb-3 rounded border border-amber-500/50 bg-amber-500/10 px-3 py-2 font-mono text-[10px] text-amber-200 tracking-[0.16em]">
+              Checkout canceled. No changes made.
+            </div>
+          )}
+
+          <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-emerald-200">
+            MODE: {currentModeLabel.toUpperCase()}
+          </div>
+
+          <div className="mt-2 space-y-1 text-[13px] text-zinc-200">
             <div>Training: up to {FREE_LIMIT} local dives on this device.</div>
-            <div>Pro: unlimited local storage on this device.</div>
-            <div>Cloud Pro: future cloud sync across devices (coming later).</div>
+            <div>Pro: unlimited local storage on this device (no cloud sync).</div>
+            <div>Cloud Pro: unlimited local storage + cloud sync enabled (coming soon).</div>
           </div>
 
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => handleCheckout(STRIPE_PRICE_PRO)}
-              className="rounded border bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200"
+              disabled={proDisabled}
+              onClick={() => handleCheckout('pro')}
+              className={`rounded border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] ${
+                proDisabled ? 'border-zinc-700 text-zinc-500' : 'bg-emerald-500/10 text-emerald-200'
+              }`}
             >
               Unlock Pro
             </button>
 
             <button
               type="button"
-              onClick={() => handleCheckout(STRIPE_PRICE_CLOUD)}
-              className="rounded border bg-sky-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-sky-200"
+              disabled={cloudDisabled}
+              onClick={() => handleCheckout('cloud')}
+              className={`rounded border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] ${
+                cloudDisabled ? 'border-zinc-700 text-zinc-500' : 'bg-sky-500/10 text-sky-200'
+              }`}
             >
               Subscribe Cloud
             </button>
           </div>
 
           <div className="mt-3 space-y-1 font-mono text-[10px] text-emerald-200 tracking-[0.18em]">
-            <div>Current mode: {currentModeLabel}</div>
+            <div>
+              {license.mode === 'cloud'
+                ? 'Cloud Pro: local + cloud sync controls unlocked.'
+                : license.mode === 'pro'
+                  ? 'Pro: unlimited local storage (no cloud sync).'
+                  : 'Training: limited to local practice (10 dives).'}
+            </div>
             <div className="text-zinc-500">
               {license.activatedAt
                 ? `Activated: ${new Date(license.activatedAt).toLocaleString()}`
@@ -1133,6 +1186,11 @@ export default function App() {
           <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
             CLOUD SYNC (DEV STUB)
           </div>
+          {!hasCloudSync && (
+            <div className="mb-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 font-mono text-[10px] text-amber-200 tracking-[0.14em]">
+              Cloud sync unlocks with Cloud Pro.
+            </div>
+          )}
           <div className="grid gap-3 text-[13px]">
             <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-400">
               <input
@@ -1163,8 +1221,8 @@ export default function App() {
               SYNC NOW (LOCAL STUB)
             </button>
             <div className="font-mono text-[10px] text-zinc-500">
-              Local-only dev stub — waits ~1s, logs to console, and marks sync OK. Real cloud sync
-              ships with Cloud Pro.
+              Cloud sync coming soon — this local stub waits ~1s, logs to console, and marks sync
+              OK.
             </div>
           </div>
         </div>
@@ -1374,30 +1432,6 @@ export default function App() {
         </div>
 
       </section>
-    );
-  }
-
-  if (pathname === '/success') {
-    return (
-      <div className="app-frame min-h-screen text-zinc-100">
-        <main className="mx-auto max-w-5xl space-y-5 px-3 py-5 md:space-y-6 md:py-7">
-          <div className="hud-subpanel rounded border border-emerald-500/60 bg-emerald-500/10 px-4 py-6 text-center text-lg text-emerald-200">
-            ✅ Payment successful
-          </div>
-        </main>
-      </div>
-    );
-  }
-
-  if (pathname === '/cancel') {
-    return (
-      <div className="app-frame min-h-screen text-zinc-100">
-        <main className="mx-auto max-w-5xl space-y-5 px-3 py-5 md:space-y-6 md:py-7">
-          <div className="hud-subpanel rounded border border-amber-500/60 bg-amber-500/10 px-4 py-6 text-center text-lg text-amber-200">
-            ❌ Payment cancelled
-          </div>
-        </main>
-      </div>
     );
   }
 
