@@ -1,0 +1,35 @@
+Subject: Welcome to DecoLog Cloud Pro 🌊
+
+Hi {{customer_first_name}},
+
+Thanks for subscribing to **DecoLog Cloud Pro** — your subscription is now active. 🎉
+
+Your plan:
+- Plan: DecoLog Cloud Pro
+- Type: Monthly subscription
+- Price: €7.00 / month
+- First charge: €7.00 on {{payment_date}}
+- Next charge: {{next_billing_date}}
+- Invoice ID: {{invoice_id}}
+
+What you get with Cloud Pro
+- Everything in DecoLog Pro (unlimited local dives, full exports)
+- Encrypted cloud backup & sync across devices (rolling out soon)
+- Priority access to new features and improvements
+- Direct feedback loop with the developer
+
+Cloud features status
+Cloud sync is being rolled out in stages. As soon as your account is eligible, you’ll see **CLOUD PRO** and **Sync enabled** inside DecoLog.  
+You don’t need to do anything — your subscription will automatically unlock these features when they’re live for your account.
+
+Manage your subscription
+You can update payment details, download invoices, or cancel anytime via your self-service portal:
+{{customer_portal_url}}
+
+Need help?
+Reply to this email or reach us at support@decolog.app.
+If something doesn’t look right with your subscription, we’ll sort it out.
+
+Thank you for supporting DecoLog and helping us build a better dive HUD,  
+The DecoLog team 🤿  
+decolog.app

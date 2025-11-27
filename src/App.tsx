@@ -206,6 +206,9 @@ export default function App() {
   const [supportMessage, setSupportMessage] = useState('');
   const [supportIncludeDevice, setSupportIncludeDevice] = useState(true);
   const [supportSaving, setSupportSaving] = useState(false);
+  const [showProfileEditor, setShowProfileEditor] = useState(false);
+  const [showEmergencyCard, setShowEmergencyCard] = useState(false);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   // seed + load dives on first mount
   useEffect(() => {
@@ -1070,13 +1073,55 @@ export default function App() {
       license.mode === 'training' ? 'Training' : license.mode === 'cloud' ? 'Cloud Pro' : 'Pro';
     const proDisabled = license.mode !== 'training' || !stripeEnvReady;
     const cloudDisabled = license.mode === 'cloud' || !stripeEnvReady;
+    const modeDescription =
+      license.mode === 'cloud'
+        ? 'Cloud Pro: unlimited local dives + cloud backup & sync across devices.'
+        : license.mode === 'pro'
+          ? 'Pro: unlimited local dives on this device. No sync.'
+          : 'Training: up to 10 dives stored on this device. Great for tryouts & courses.';
+    const profileName = profile.fullName?.trim() || 'Not set';
+    const profileSummary =
+      [profile.country, profile.agency, profile.certLevel].filter(Boolean).join(' / ') || 'Not set';
+    const emergencySummary =
+      profile.emergencyContactName || profile.emergencyContactPhone
+        ? `${profile.emergencyContactName || 'Name not set'} – ${profile.emergencyContactPhone || 'Phone not set'}`
+        : 'Not set';
+    const envLabel = (import.meta.env.MODE || 'dev').toUpperCase();
+    const buildInfo = { version: 'v0.x.x', hash: 'dev-build', env: envLabel };
+
+    const handleDevUnlock = (mode: 'pro' | 'cloud') => {
+      setLicense((prev) => setLicenseMode(mode, prev));
+    };
+
+    const handleDumpLocalStorage = () => {
+      if (typeof window === 'undefined') return;
+      const snapshot: Record<string, string> = {};
+      for (let i = 0; i < window.localStorage.length; i += 1) {
+        const key = window.localStorage.key(i);
+        if (key) {
+          snapshot[key] = window.localStorage.getItem(key) ?? '';
+        }
+      }
+      console.log('DecoLog localStorage snapshot', snapshot);
+    };
+
+    const handleResetLocalData = () => {
+      console.log('DecoLog reset stub: hook up Dexie clearing here if needed.');
+    };
 
     return (
       <section className="flex flex-col gap-5">
-        {/* License & upgrades */}
+        <div className="flex flex-col gap-1">
+          <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+            MORE // SYSTEM
+          </div>
+          <div className="font-mono text-[10px] text-zinc-500">Device, license, export, and support tools.</div>
+        </div>
+
+        {/* License & plans */}
         <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
           <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
-            LICENSE & UPGRADES
+            LICENSE & PLANS
           </div>
 
           {!stripeEnvReady && (
@@ -1097,98 +1142,88 @@ export default function App() {
             </div>
           )}
 
-          <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-emerald-200">
-            MODE: {currentModeLabel.toUpperCase()}
+          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-2 rounded border border-emerald-500/50 bg-emerald-500/10 px-2 py-1 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200">
+                MODE: {currentModeLabel.toUpperCase()}
+              </div>
+              <div className="text-[13px] text-zinc-200">{modeDescription}</div>
+            </div>
+            <div className="font-mono text-[10px] text-zinc-500 md:text-right">
+              <div>Training limit: up to {FREE_LIMIT} dives on this device.</div>
+              <div>
+                {license.activatedAt
+                  ? `Activated: ${new Date(license.activatedAt).toLocaleString()}`
+                  : 'Activation pending while in training.'}
+              </div>
+            </div>
           </div>
 
-          <div className="mt-2 space-y-1 text-[13px] text-zinc-200">
-            <div>Training: up to {FREE_LIMIT} local dives on this device.</div>
-            <div>Pro: unlimited local storage on this device (no cloud sync).</div>
-            <div>Cloud Pro: unlimited local storage + cloud sync enabled (coming soon).</div>
+          <div className="mt-3 space-y-1 font-mono text-[10px] text-zinc-300 tracking-[0.18em]">
+            <div>• TRAINING – up to 10 local dives</div>
+            <div>• PRO – unlimited local storage</div>
+            <div>• CLOUD PRO – sync, backup, and multi-device access</div>
           </div>
 
           <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={proDisabled}
-              onClick={() => handleCheckout('pro')}
-              className={`rounded border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] ${
-                proDisabled ? 'border-zinc-700 text-zinc-500' : 'bg-emerald-500/10 text-emerald-200'
-              }`}
-            >
-              Unlock Pro
-            </button>
-
-            <button
-              type="button"
-              disabled={cloudDisabled}
-              onClick={() => handleCheckout('cloud')}
-              className={`rounded border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] ${
-                cloudDisabled ? 'border-zinc-700 text-zinc-500' : 'bg-sky-500/10 text-sky-200'
-              }`}
-            >
-              Subscribe Cloud
-            </button>
-          </div>
-
-          <div className="mt-3 space-y-1 font-mono text-[10px] text-emerald-200 tracking-[0.18em]">
-            <div>
-              {license.mode === 'cloud'
-                ? 'Cloud Pro: local + cloud sync controls unlocked.'
-                : license.mode === 'pro'
-                  ? 'Pro: unlimited local storage (no cloud sync).'
-                  : 'Training: limited to local practice (10 dives).'}
-            </div>
-            <div className="text-zinc-500">
-              {license.activatedAt
-                ? `Activated: ${new Date(license.activatedAt).toLocaleString()}`
-                : 'Activation pending while in training.'}
-            </div>
-          </div>
-        </div>
-
-        {/* Export module */}
-        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
-          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
-            EXPORT & BACKUP
-          </div>
-
-          <div className="export-keys flex flex-wrap gap-2">
-            <button
-              className="export-key-btn rounded border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
-              onClick={handleExportJson}
-            >
-              EXPORT JSON
-            </button>
-
-            <button
-              className="export-key-btn rounded border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
-              onClick={handleExportCsv}
-            >
-              EXPORT CSV
-            </button>
-
-            <button
-              className="export-key-btn rounded border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
-              onClick={handleExportPdf}
-            >
-              EXPORT PDF
-            </button>
-          </div>
-
-          <div className="mt-3 font-mono text-[10px] text-zinc-500">
-            Quick backups: JSON/CSV for data reuse, PDF keeps the DIVE OPS HUD header for sharing.
+            {license.mode === 'training' && (
+              <>
+                <button
+                  type="button"
+                  disabled={proDisabled}
+                  onClick={() => handleCheckout('pro')}
+                  className={`rounded border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] ${
+                    proDisabled
+                      ? 'border-zinc-700 text-zinc-500'
+                      : 'bg-emerald-500/10 text-emerald-200'
+                  }`}
+                >
+                  Upgrade to Pro
+                </button>
+                <button
+                  type="button"
+                  disabled={cloudDisabled}
+                  onClick={() => handleCheckout('cloud')}
+                  className={`rounded border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] ${
+                    cloudDisabled ? 'border-zinc-700 text-zinc-500' : 'bg-sky-500/10 text-sky-200'
+                  }`}
+                >
+                  Go Cloud Pro
+                </button>
+              </>
+            )}
+            {license.mode === 'pro' && (
+              <button
+                type="button"
+                disabled={cloudDisabled}
+                onClick={() => handleCheckout('cloud')}
+                className={`rounded border px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] ${
+                  cloudDisabled ? 'border-zinc-700 text-zinc-500' : 'bg-sky-500/10 text-sky-200'
+                }`}
+              >
+                Go Cloud Pro
+              </button>
+            )}
+            {license.mode === 'cloud' && (
+              <button
+                type="button"
+                disabled
+                className="rounded border border-zinc-700 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-zinc-400"
+              >
+                Cloud Pro Active
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Cloud sync config (stub) */}
+        {/* Cloud & sync */}
         <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
           <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
-            CLOUD SYNC (DEV STUB)
+            CLOUD & SYNC
           </div>
           {!hasCloudSync && (
             <div className="mb-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 font-mono text-[10px] text-amber-200 tracking-[0.14em]">
-              Cloud sync unlocks with Cloud Pro.
+              Cloud sync will be available once your Cloud Pro license is active.
             </div>
           )}
           <div className="grid gap-3 text-[13px]">
@@ -1200,17 +1235,14 @@ export default function App() {
                 disabled={!hasCloudSync}
                 onChange={(e) => handleToggleCloudSync(e.target.checked)}
               />
-              Enable cloud sync (requires Cloud Pro)
+              Enable cloud sync (Cloud Pro)
             </label>
             <div className="font-mono text-[10px] text-zinc-500">
-              Status: {syncConfig.lastSyncStatus.toUpperCase()}{' '}
-              {syncing ? '(running...)' : ''}
+              Status: {syncConfig.lastSyncStatus.toUpperCase()} {syncing ? '(running...)' : ''}
             </div>
             <div className="font-mono text-[10px] text-zinc-500">
               Last sync:{' '}
-              {syncConfig.lastSyncAt
-                ? new Date(syncConfig.lastSyncAt).toLocaleString()
-                : 'never'}
+              {syncConfig.lastSyncAt ? new Date(syncConfig.lastSyncAt).toLocaleString() : 'never'}
             </div>
             <button
               type="button"
@@ -1218,19 +1250,245 @@ export default function App() {
               onClick={handleManualSync}
               className="rounded border border-emerald-500 bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200 disabled:border-zinc-700 disabled:text-zinc-500"
             >
-              SYNC NOW (LOCAL STUB)
+              SYNC NOW
             </button>
             <div className="font-mono text-[10px] text-zinc-500">
-              Cloud sync coming soon — this local stub waits ~1s, logs to console, and marks sync
-              OK.
+              Note: For now this is local-only wiring. Full cloud sync will come in a later version.
             </div>
           </div>
         </div>
 
-        {/* Support */}
+        {/* Data export */}
         <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
           <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
-            SUPPORT / CONTACT
+            DATA EXPORT
+          </div>
+          <div className="text-[13px] text-zinc-200">
+            Export your dive logs for backups, audits, or sharing with instructors.
+          </div>
+          <div className="mt-3 export-keys flex flex-wrap gap-2">
+            <button
+              className="export-key-btn rounded border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
+              onClick={handleExportJson}
+            >
+              EXPORT JSON
+            </button>
+            <button
+              className="export-key-btn rounded border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
+              onClick={handleExportCsv}
+            >
+              EXPORT CSV
+            </button>
+            <button
+              className="export-key-btn rounded border border-zinc-600 text-zinc-200 px-3 py-2 font-mono text-[11px] tracking-[0.12em] hover:bg-zinc-800"
+              onClick={handleExportPdf}
+            >
+              EXPORT PDF
+            </button>
+          </div>
+          <div className="mt-3 font-mono text-[10px] text-zinc-500">
+            Exports use only the logs stored on this device.
+          </div>
+        </div>
+
+        {/* Diver profile & emergency */}
+        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
+          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+            DIVER PROFILE & EMERGENCY
+          </div>
+          <div className="space-y-2 text-[13px]">
+            <div className="font-mono text-[10px] text-zinc-400">Name</div>
+            <div className="font-mono text-[13px] text-zinc-200">{profileName}</div>
+            <div className="font-mono text-[10px] text-zinc-400">Country / Agency / Level</div>
+            <div className="font-mono text-[13px] text-zinc-200">{profileSummary}</div>
+            <div className="font-mono text-[10px] text-zinc-400">Emergency contact</div>
+            <div className="font-mono text-[13px] text-zinc-200">{emergencySummary}</div>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setShowProfileEditor((prev) => !prev)}
+              className="rounded border border-emerald-500 bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200"
+            >
+              {showProfileEditor ? 'Close Profile Editor' : 'Edit Profile'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowEmergencyCard((prev) => !prev)}
+              className="rounded border border-zinc-700 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-zinc-200"
+            >
+              {showEmergencyCard ? 'Hide Emergency Card' : 'Show Emergency Card'}
+            </button>
+          </div>
+          <div className="mt-3 font-mono text-[10px] text-zinc-500">
+            Profile stays on this device. Cloud syncing of profile will arrive with Cloud Pro.
+          </div>
+
+          {showEmergencyCard && (
+            <div className="mt-3 rounded border border-zinc-800 bg-zinc-950/60 p-3">
+              <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-zinc-500">
+                EMERGENCY CARD
+              </div>
+              <div className="mt-2 space-y-1 font-mono text-[11px] text-zinc-200">
+                <div>Contact: {emergencySummary}</div>
+                <div>Notes: {profile.emergencyNotes || 'Not set'}</div>
+                <div>Additional: {profile.notes || 'Not set'}</div>
+              </div>
+            </div>
+          )}
+
+          {showProfileEditor && (
+            <div className="mt-4 rounded border border-zinc-800 bg-zinc-950/60 p-4">
+              <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+                EDIT PROFILE
+              </div>
+              <div className="grid gap-2 md:grid-cols-2 text-[13px]">
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                    Full name
+                  </span>
+                  <input
+                    type="text"
+                    className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                    value={profile.fullName}
+                    onChange={(e) => setProfile((p) => ({ ...p, fullName: e.target.value }))}
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                    Country
+                  </span>
+                  <input
+                    type="text"
+                    className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                    value={profile.country}
+                    onChange={(e) => setProfile((p) => ({ ...p, country: e.target.value }))}
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                    Agency
+                  </span>
+                  <input
+                    type="text"
+                    className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                    value={profile.agency}
+                    onChange={(e) => setProfile((p) => ({ ...p, agency: e.target.value }))}
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                    Certification level
+                  </span>
+                  <input
+                    type="text"
+                    className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                    value={profile.certLevel}
+                    onChange={(e) => setProfile((p) => ({ ...p, certLevel: e.target.value }))}
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                    Certification number
+                  </span>
+                  <input
+                    type="text"
+                    className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                    value={profile.certNumber}
+                    onChange={(e) => setProfile((p) => ({ ...p, certNumber: e.target.value }))}
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                    Email
+                  </span>
+                  <input
+                    type="email"
+                    className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                    value={profile.email}
+                    onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value }))}
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                    Emergency contact name
+                  </span>
+                  <input
+                    type="text"
+                    className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                    value={profile.emergencyContactName}
+                    onChange={(e) =>
+                      setProfile((p) => ({ ...p, emergencyContactName: e.target.value }))
+                    }
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                    Emergency contact phone
+                  </span>
+                  <input
+                    type="text"
+                    className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                    value={profile.emergencyContactPhone}
+                    onChange={(e) =>
+                      setProfile((p) => ({ ...p, emergencyContactPhone: e.target.value }))
+                    }
+                  />
+                </label>
+              </div>
+
+              <div className="mt-2 grid gap-2 md:grid-cols-2">
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                    Emergency notes
+                  </span>
+                  <textarea
+                    rows={3}
+                    className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                    value={profile.emergencyNotes}
+                    onChange={(e) =>
+                      setProfile((p) => ({ ...p, emergencyNotes: e.target.value }))
+                    }
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
+                    Additional notes
+                  </span>
+                  <textarea
+                    rows={3}
+                    className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
+                    value={profile.notes}
+                    onChange={(e) => setProfile((p) => ({ ...p, notes: e.target.value }))}
+                  />
+                </label>
+              </div>
+
+              <div className="mt-2 flex justify-end">
+                <button
+                  type="button"
+                  disabled={profileSaving}
+                  onClick={handleSaveProfile}
+                  className="rounded border border-emerald-500 bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200 disabled:border-zinc-700 disabled:text-zinc-500"
+                >
+                  SAVE PROFILE
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Support & feedback */}
+        <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
+          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+            SUPPORT & FEEDBACK
           </div>
 
           <div className="grid gap-2 text-[13px]">
@@ -1270,7 +1528,8 @@ export default function App() {
 
             <div className="mt-1 flex items-center justify-between">
               <div className="max-w-md font-mono text-[9px] text-zinc-500">
-                Messages are stored locally for now. Send-out will be wired alongside cloud sync.
+                Messages are stored locally in this HUD for now. Outbound send will be wired in a
+                future update.
               </div>
               <button
                 type="button"
@@ -1284,153 +1543,79 @@ export default function App() {
           </div>
         </div>
 
-        {/* Diver profile */}
+        {/* Developer / diagnostics */}
         <div className="mil-panel rounded-lg border border-zinc-800 bg-zinc-950/60 p-4">
-          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
-            DIVER PROFILE
-          </div>
-
-          <div className="grid gap-2 md:grid-cols-2 text-[13px]">
-            <label className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                Full name
-              </span>
-              <input
-                type="text"
-                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
-                value={profile.fullName}
-                onChange={(e) => setProfile((p) => ({ ...p, fullName: e.target.value }))}
-              />
-            </label>
-
-            <label className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                Country
-              </span>
-              <input
-                type="text"
-                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
-                value={profile.country}
-                onChange={(e) => setProfile((p) => ({ ...p, country: e.target.value }))}
-              />
-            </label>
-
-            <label className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                Agency
-              </span>
-              <input
-                type="text"
-                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
-                value={profile.agency}
-                onChange={(e) => setProfile((p) => ({ ...p, agency: e.target.value }))}
-              />
-            </label>
-
-            <label className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                Certification level
-              </span>
-              <input
-                type="text"
-                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
-                value={profile.certLevel}
-                onChange={(e) => setProfile((p) => ({ ...p, certLevel: e.target.value }))}
-              />
-            </label>
-
-            <label className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                Certification number
-              </span>
-              <input
-                type="text"
-                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
-                value={profile.certNumber}
-                onChange={(e) => setProfile((p) => ({ ...p, certNumber: e.target.value }))}
-              />
-            </label>
-
-            <label className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                Email
-              </span>
-              <input
-                type="email"
-                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
-                value={profile.email}
-                onChange={(e) => setProfile((p) => ({ ...p, email: e.target.value }))}
-              />
-            </label>
-
-            <label className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                Emergency contact name
-              </span>
-              <input
-                type="text"
-                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
-                value={profile.emergencyContactName}
-                onChange={(e) =>
-                  setProfile((p) => ({ ...p, emergencyContactName: e.target.value }))
-                }
-              />
-            </label>
-
-            <label className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                Emergency contact phone
-              </span>
-              <input
-                type="text"
-                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
-                value={profile.emergencyContactPhone}
-                onChange={(e) =>
-                  setProfile((p) => ({ ...p, emergencyContactPhone: e.target.value }))
-                }
-              />
-            </label>
-          </div>
-
-          <div className="mt-2 grid gap-2 md:grid-cols-2">
-            <label className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                Emergency notes
-              </span>
-              <textarea
-                rows={3}
-                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
-                value={profile.emergencyNotes}
-                onChange={(e) =>
-                  setProfile((p) => ({ ...p, emergencyNotes: e.target.value }))
-                }
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-400">
-                Additional notes
-              </span>
-              <textarea
-                rows={3}
-                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-sm"
-                value={profile.notes}
-                onChange={(e) => setProfile((p) => ({ ...p, notes: e.target.value }))}
-              />
-            </label>
-          </div>
-
-          <div className="mt-2 flex justify-end">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-zinc-500">
+              DEVELOPER / DIAGNOSTICS
+            </div>
             <button
               type="button"
-              disabled={profileSaving}
-              onClick={handleSaveProfile}
-              className="rounded border border-emerald-500 bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200 disabled:border-zinc-700 disabled:text-zinc-500"
+              onClick={() => setShowDiagnostics((prev) => !prev)}
+              className="rounded border border-zinc-700 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-200"
             >
-              SAVE PROFILE
+              {showDiagnostics ? 'Close' : 'Open'}
             </button>
           </div>
-        </div>
+          {showDiagnostics && (
+            <div className="space-y-3 text-[13px]">
+              <div className="rounded border border-zinc-800 bg-zinc-950/60 p-3">
+                <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                  Dev payment stubs
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleDevUnlock('pro')}
+                    className="rounded border border-emerald-500 bg-emerald-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-emerald-200"
+                  >
+                    Unlock Pro (dev stub)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDevUnlock('cloud')}
+                    className="rounded border border-sky-500 bg-sky-500/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-sky-200"
+                  >
+                    Unlock Cloud (dev stub)
+                  </button>
+                </div>
+              </div>
 
+              <div className="rounded border border-zinc-800 bg-zinc-950/60 p-3">
+                <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                  Storage & reset
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleDumpLocalStorage}
+                    className="rounded border border-zinc-700 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-zinc-200"
+                  >
+                    Dump local storage to console
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetLocalData}
+                    className="rounded border border-red-500 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.2em] text-red-200"
+                  >
+                    Reset local data (danger)
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded border border-zinc-800 bg-zinc-950/60 p-3">
+                <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                  Build info
+                </div>
+                <div className="mt-2 space-y-1 font-mono text-[11px] text-zinc-200">
+                  <div>Version: {buildInfo.version}</div>
+                  <div>Build: {buildInfo.hash}</div>
+                  <div>Environment: {buildInfo.env}</div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </section>
     );
   }

@@ -1,0 +1,67 @@
+DECOLOG // LICENSE & CLOUD
+
+[ HEADER ]
++------------------------------------------------------+
+| DECOLOG logo        [LOG] [STATS] [MORE]    [PROFILE]|
++------------------------------------------------------+
+
+[ CURRENT MODE / STATUS ]
++------------------------------------------------------+
+| MODE: TRAINING                                       |
+| • Up to 10 dives on this device                      |
+| • Local-only storage                                 |
++------------------------------------------------------+
+
+[ PLANS GRID ]
++------------------------------------------------------+
+| [ CARD 1: TRAINING (CURRENT) ]                       |
+|  Title: Training (Free)                              |
+|  Price: €0                                           |
+|  Badge: CURRENT PLAN                                 |
+|  Bullets:                                            |
+|    • Up to 10 local dives                            |
+|    • Export JSON / CSV / PDF                         |
+|    • Great for trying DecoLog                        |
+|  Button: [ ACTIVE ] (disabled)                       |
++------------------------------------------------------+
+
++------------------------------------------------------+
+| [ CARD 2: PRO – UNLIMITED LOCAL ]                    |
+|  Title: DecoLog Pro                                  |
+|  Price: €29.00 (one-time)                            |
+|  Bullets:                                            |
+|    • Unlimited local dives on this device            |
+|    • Full export (JSON / CSV / PDF)                  |
+|    • Priority bugfixes & improvements                |
+|    • Ideal as an offline dive HUD                    |
+|  Button: [ UNLOCK PRO – €29 ONE-TIME ]               |
+|          -> Calls Stripe Checkout with:              |
+|             mode: "payment"                          |
+|             price: price_1SXWqcPhXgltCqgv1fepULac    |
++------------------------------------------------------+
+
++------------------------------------------------------+
+| [ CARD 3: CLOUD PRO – SYNC ]                         |
+|  Title: DecoLog Cloud Pro                            |
+|  Price: €7.00 / month                                |
+|  Bullets:                                            |
+|    • Everything in Pro                               |
+|    • Encrypted cloud backup & sync (coming soon)     |
+|    • Multi-device access                             |
+|    • Early access to new features                    |
+|  Note: "Cloud sync is a roadmap feature. Subscribing |
+|         now supports development and unlocks it as   |
+|         soon as it ships."                           |
+|  Button: [ SUBSCRIBE TO CLOUD PRO – €7 / MONTH ]     |
+|          -> Calls Stripe Checkout with:              |
+|             mode: "subscription"                     |
+|             price: price_1SXWqsPhXgltCqgv74QfYiHN    |
++------------------------------------------------------+
+
+[ FAQ / SAFETY FOOTER ]
++------------------------------------------------------+
+| • All payments are handled securely by Stripe.       |
+| • You’ll receive a confirmation email with a receipt.|
+| • You can manage or cancel your Cloud Pro plan at    |
+|   any time via the Stripe customer portal.           |
++------------------------------------------------------+

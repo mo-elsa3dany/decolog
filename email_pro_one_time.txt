@@ -1,0 +1,29 @@
+Subject: Your DecoLog Pro license is active ✅
+
+Hi {{customer_first_name}},
+
+Thanks for supporting DecoLog — your **DecoLog Pro** license is now active. 🎉
+
+Here’s what you just unlocked:
+- Unlimited local dive logs on this device
+- Full export options (JSON, CSV, PDF)
+- Priority bug fixes & improvements
+
+Purchase details:
+- Plan: DecoLog Pro
+- Type: One-time license
+- Amount: €29.00
+- Transaction ID: {{payment_intent_id}}
+- Date: {{payment_date}}
+
+How to use your license
+- If you were already running DecoLog, your HUD should now show **MODE: PRO**.
+- If not, just open DecoLog on this device and your license will be picked up automatically once linked to this email: {{customer_email}}.
+
+Need help or have feedback?
+Just reply to this email or contact us at support@decolog.app.
+We’re building DecoLog for real divers, and your feedback genuinely shapes the roadmap.
+
+Thanks again for your support and safe diving,  
+The DecoLog team 🌊  
+decolog.app
