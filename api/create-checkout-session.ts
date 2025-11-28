@@ -1,32 +1,8 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
 import Stripe from 'stripe';
+import type { NextApiRequest, NextApiResponse } from 'next';
+import { parseJsonBody, allowedPrices } from './utils.js';
 
-function allowedPrices(): string[] {
-  return [
-    process.env.STRIPE_PRICE_MONTHLY,
-    process.env.STRIPE_PRICE_YEARLY,
-    process.env.STRIPE_PRICE_PRO,
-    process.env.STRIPE_PRICE_CLOUD,
-    process.env.VITE_STRIPE_PRICE_PRO,
-    process.env.VITE_STRIPE_PRICE_CLOUD,
-  ].filter((id): id is string => Boolean(id));
-}
-
-function parseJsonBody(req: VercelRequest): Record<string, unknown> {
-  if (typeof req.body === 'string') {
-    try {
-      return JSON.parse(req.body) as Record<string, unknown>;
-    } catch {
-      return {};
-    }
-  }
-  if (typeof req.body === 'object' && req.body != null) {
-    return req.body as Record<string, unknown>;
-  }
-  return {};
-}
-
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
@@ -60,7 +36,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const session = await stripe.checkout.sessions.create(
       {
-        mode: 'subscription',
+        mode: 'payment',                 // <-- FIXED: one-time purchase
+        payment_method_types: ['card'],
         line_items: [
           {
             price: priceId,
@@ -70,9 +47,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         success_url: `${appUrl}/?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${appUrl}/?checkout=cancel`,
         metadata: { deviceId },
-        subscription_data: {
-          metadata: { deviceId },
-        },
       },
       { idempotencyKey: `checkout_${deviceId}_${priceId}` },
     );
