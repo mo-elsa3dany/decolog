@@ -2,14 +2,16 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react-swc';
 import { VitePWA } from 'vite-plugin-pwa';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      // Enable PWA in dev preview via `npm run preview` (we'll still test offline via preview)
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.ts',
       devOptions: {
-        enabled: false,
+        enabled: mode === 'development',
       },
       // We already have a manifest.webmanifest in public/, so we let it stand.
       // Workbox will precache all these file types from the production build:
@@ -17,10 +19,12 @@ export default defineConfig({
       workbox: {
         cleanupOutdatedCaches: true,
         sourcemap: false,
-        mode: 'development',
-        globPatterns: ['**/*.{js,css,html,svg,png,ico,webmanifest}'],
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
         navigateFallback: '/index.html',
+      },
+      injectManifest: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
       },
     }),
   ],
-});
+}));

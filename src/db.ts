@@ -57,6 +57,20 @@ class DecoLogDB extends Dexie {
       profile: 'id',
       support: '++id, createdAt, sent',
     });
+
+    this.version(2)
+      .stores({
+        dives: '++id, date, location, createdAt',
+        profile: 'id',
+        support: '++id, createdAt, sent',
+      })
+      .upgrade((tx) =>
+        tx.table('dives').toCollection().modify((dive: DiveRecord) => {
+          if (!dive.location) {
+            dive.location = '—';
+          }
+        }),
+      );
   }
 }
 

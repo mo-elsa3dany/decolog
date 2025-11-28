@@ -3,8 +3,6 @@ import jsPDF from 'jspdf';
 import {
   seedIfEmpty,
   getDives,
-  addDive,
-  updateDive,
   deleteDive,
   type StoredDive,
   getProfile,
@@ -15,17 +13,24 @@ import {
   type SupportInput,
   getSyncConfig,
   saveSyncConfig,
+  safeAddDive,
+  safeUpdateDive,
 } from './storage';
+import type { GasKind } from './db';
+import { validateDiveForm } from './domain/dive';
 import { loadLicense, saveLicense, setLicenseMode, type LicenseState } from './state/license';
 import { appBaseUrl, stripePriceCloud, stripePricePro, stripePublishableKey } from './config/stripe';
+import { getDeviceId } from './lib/deviceId';
 
 type Tab = 'log' | 'stats' | 'more';
-type Gas = 'AIR' | 'EAN32';
+type Gas = GasKind;
 type Units = 'metric' | 'imperial';
 
 const FREE_LIMIT = 10;
 const LICENSE_COPY =
   'Training: up to 10 dives on this device. Pro: unlimited local storage. Cloud Pro: sync (coming soon).';
+const STORAGE_ERROR_MESSAGE =
+  'We could not save this dive. Your browser storage may be full or unsupported. Please export your log as a backup.';
 
 // ---------------------------------------------------------------------
 // Helpers
@@ -159,11 +164,17 @@ function emptyProfile(): ProfileState {
 // ---------------------------------------------------------------------
 export default function App() {
   async function handleCheckout(mode: 'pro' | 'cloud') {
+    const priceId = mode === 'pro' ? stripePricePro : stripePriceCloud;
+    const deviceId = getDeviceId();
+
     try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('decolog.pendingCheckoutMode', mode);
+      }
       const res = await fetch('/api/create-checkout-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ priceId, deviceId, mode }),
       });
 
       const data = (await res.json()) as { url?: string; error?: string };
@@ -175,6 +186,9 @@ export default function App() {
       window.location.href = data.url;
     } catch (error) {
       console.error('Checkout failed', error);
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem('decolog.pendingCheckoutMode');
+      }
       alert('Checkout failed. Please try again or contact support.');
     }
   }
@@ -191,6 +205,11 @@ export default function App() {
   });
 
   const [license, setLicense] = useState<LicenseState>(() => loadLicense());
+  const [remoteLicense, setRemoteLicense] = useState<{
+    active: boolean;
+    status: string | null;
+    subscriptionId: string | null;
+  }>({ active: false, status: null, subscriptionId: null });
   const [syncConfig, setSyncConfig] = useState<SyncConfig>(() => getSyncConfig());
   const [syncing, setSyncing] = useState(false);
   const [checkoutStatus, setCheckoutStatus] = useState<'success' | 'cancel' | null>(null);
@@ -198,6 +217,8 @@ export default function App() {
   const [form, setForm] = useState<DiveFormState>(emptyDiveForm());
   const [editingId, setEditingId] = useState<number | null>(null);
   const [savingDive, setSavingDive] = useState(false);
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const [profile, setProfile] = useState<ProfileState>(emptyProfile());
   const [profileSaving, setProfileSaving] = useState(false);
@@ -273,13 +294,60 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    let cancelled = false;
+    const deviceId = getDeviceId();
+
+    async function fetchLicenseStatus() {
+      try {
+        const res = await fetch('/api/license-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ deviceId }),
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          active?: boolean;
+          status?: string | null;
+          subscriptionId?: string | null;
+        };
+        if (cancelled) return;
+        setRemoteLicense({
+          active: Boolean(data.active),
+          status: data.status ?? null,
+          subscriptionId: data.subscriptionId ?? null,
+        });
+        if (data.active) {
+          setLicense((prev) => (prev.mode === 'training' ? setLicenseMode('pro', prev) : prev));
+        }
+      } catch (error) {
+        console.warn('Failed to fetch license status', error);
+      }
+    }
+
+    fetchLicenseStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
     const checkout = params.get('checkout');
     const mode = params.get('mode');
     const normalizedMode = mode === 'pro' || mode === 'cloud' ? mode : null;
 
-    if (checkout === 'success' && normalizedMode) {
-      setLicense((prev) => setLicenseMode(normalizedMode, prev));
+    const pendingMode = (() => {
+      if (typeof window === 'undefined') return null;
+      const stored = window.localStorage.getItem('decolog.pendingCheckoutMode');
+      if (stored === 'pro' || stored === 'cloud') return stored;
+      return null;
+    })();
+
+    if (checkout === 'success' && (normalizedMode || pendingMode)) {
+      const nextMode = normalizedMode ?? pendingMode ?? 'training';
+      setLicense((prev) => setLicenseMode(nextMode, prev));
       setCheckoutStatus('success');
     } else if (checkout === 'cancel') {
       setCheckoutStatus('cancel');
@@ -291,13 +359,17 @@ export default function App() {
       params.delete('session_id');
       const nextSearch = params.toString();
       const nextUrl = nextSearch ? `${window.location.pathname}?${nextSearch}` : window.location.pathname;
+      if (pendingMode) {
+        window.localStorage.removeItem('decolog.pendingCheckoutMode');
+      }
       window.history.replaceState({}, '', nextUrl);
     }
   }, []);
 
-  const isTraining = license.mode === 'training';
-  const isPro = license.mode === 'pro' || license.mode === 'cloud';
-  const hasCloudSync = license.mode === 'cloud';
+  const effectiveMode = remoteLicense.active && license.mode === 'training' ? 'pro' : license.mode;
+  const isTraining = effectiveMode === 'training';
+  const isPro = effectiveMode === 'pro' || effectiveMode === 'cloud';
+  const hasCloudSync = effectiveMode === 'cloud';
 
   const canAddDive = isTraining ? dives.length < FREE_LIMIT : true;
 
@@ -360,48 +432,66 @@ export default function App() {
 
   async function handleSaveDive() {
     if (savingDive) return;
+    setSaveError(null);
+
+    const validation = validateDiveForm(form);
+    if (!validation.success) {
+      setFormErrors(validation.errors);
+      return;
+    }
+
     setSavingDive(true);
+    setFormErrors({});
+    const data = validation.data;
+    const depth = data.depthMeters;
+    const time = data.bottomTimeMin;
+    const startP = data.startBar;
+    const endP = data.endBar;
+    const cyl = data.cylinderLiters ?? 11.1;
+
+    let sacLpm = 0;
+    if (depth > 0 && time > 0 && startP > 0 && endP >= 0 && startP > endP) {
+      const barUsed = startP - endP;
+      const gasUsedLiters = barUsed * cyl;
+      const ambient = depth / 10 + 1; // rough
+      const rmv = gasUsedLiters / time;
+      sacLpm = rmv / ambient;
+    }
+
+    const payload = {
+      date: data.date || isoToday(),
+      site: data.site,
+      location: data.location,
+      depthMeters: depth,
+      bottomTimeMin: time,
+      gas: data.gas,
+      sacLpm,
+      startBar: startP,
+      endBar: endP,
+      cylinderLiters: cyl,
+      notes: data.notes,
+    };
+
     try {
-      const depth = Number(form.depth) || 0;
-      const time = Number(form.time) || 0;
-      const startP = Number(form.startBar) || 0;
-      const endP = Number(form.endBar) || 0;
-      const cyl = Number(form.cylinderLiters) || 11.1;
-
-      let sacLpm = 0;
-      if (depth > 0 && time > 0 && startP > 0 && endP > 0 && startP > endP) {
-        const barUsed = startP - endP;
-        const gasUsedLiters = barUsed * cyl;
-        const ambient = depth / 10 + 1; // rough
-        const rmv = gasUsedLiters / time;
-        sacLpm = rmv / ambient;
-      }
-
-      const payload = {
-        date: form.date || isoToday(),
-        site: form.site.trim() || 'UNNAMED SITE',
-        location: form.location.trim() || '—',
-        depthMeters: depth,
-        bottomTimeMin: time,
-        gas: form.gas,
-        sacLpm,
-        startBar: startP || undefined,
-        endBar: endP || undefined,
-        cylinderLiters: cyl || undefined,
-        notes: form.notes.trim() || undefined,
-      };
-
       if (editingId != null) {
-        await updateDive(editingId, payload);
+        const result = await safeUpdateDive(editingId, payload);
+        if (result === 'error') {
+          setSaveError(STORAGE_ERROR_MESSAGE);
+          return;
+        }
         setDives((prev) =>
           prev.map((d) => (d.id === editingId ? { ...d, ...payload, updatedAt: Date.now() } : d)),
         );
       } else {
         if (!canAddDive) {
-          setSavingDive(false);
           return;
         }
-        const saved = await addDive(payload);
+        const result = await safeAddDive(payload);
+        if (result.status === 'error') {
+          setSaveError(STORAGE_ERROR_MESSAGE);
+          return;
+        }
+        const saved = result.dive;
         setDives((prev) => {
           const list = [saved, ...prev];
           list.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -411,6 +501,7 @@ export default function App() {
 
       setForm(emptyDiveForm());
       setEditingId(null);
+      setSaveError(null);
     } finally {
       setSavingDive(false);
     }
@@ -418,6 +509,8 @@ export default function App() {
 
   function handleEditDive(dive: StoredDive) {
     setEditingId(dive.id ?? null);
+    setFormErrors({});
+    setSaveError(null);
     setForm({
       id: dive.id,
       date: dive.date,
@@ -440,12 +533,22 @@ export default function App() {
     if (editingId === id) {
       setEditingId(null);
       setForm(emptyDiveForm());
+      setFormErrors({});
+      setSaveError(null);
     }
   }
 
   function handleCancelEdit() {
     setEditingId(null);
     setForm(emptyDiveForm());
+    setFormErrors({});
+    setSaveError(null);
+  }
+
+  function renderFieldError(key: string) {
+    const message = formErrors[key];
+    if (!message) return null;
+    return <div className="text-[11px] text-red-300">{message}</div>;
   }
 
   // -------------------------------------------------------------------
@@ -775,6 +878,7 @@ export default function App() {
                   value={form.date}
                   onChange={(e) => handleFormChange('date', e.target.value)}
                 />
+                {renderFieldError('date')}
               </label>
 
               <label className="flex flex-col gap-1">
@@ -787,6 +891,7 @@ export default function App() {
                   value={form.location}
                   onChange={(e) => handleFormChange('location', e.target.value)}
                 />
+                {renderFieldError('location')}
               </label>
             </div>
 
@@ -800,6 +905,7 @@ export default function App() {
                 value={form.site}
                 onChange={(e) => handleFormChange('site', e.target.value)}
               />
+              {renderFieldError('site')}
             </label>
 
             <div className="grid grid-cols-3 gap-2">
@@ -814,6 +920,7 @@ export default function App() {
                   value={form.depth}
                   onChange={(e) => handleFormChange('depth', e.target.value)}
                 />
+                {renderFieldError('depthMeters')}
               </label>
 
               <label className="flex flex-col gap-1">
@@ -827,6 +934,7 @@ export default function App() {
                   value={form.time}
                   onChange={(e) => handleFormChange('time', e.target.value)}
                 />
+                {renderFieldError('bottomTimeMin')}
               </label>
 
               <label className="flex flex-col gap-1">
@@ -841,6 +949,7 @@ export default function App() {
                   value={form.cylinderLiters}
                   onChange={(e) => handleFormChange('cylinderLiters', e.target.value)}
                 />
+                {renderFieldError('cylinderLiters')}
               </label>
             </div>
 
@@ -856,6 +965,7 @@ export default function App() {
                   value={form.startBar}
                   onChange={(e) => handleFormChange('startBar', e.target.value)}
                 />
+                {renderFieldError('startBar')}
               </label>
 
               <label className="flex flex-col gap-1">
@@ -869,6 +979,7 @@ export default function App() {
                   value={form.endBar}
                   onChange={(e) => handleFormChange('endBar', e.target.value)}
                 />
+                {renderFieldError('endBar')}
               </label>
 
               <div className="flex flex-col gap-1">
@@ -913,6 +1024,12 @@ export default function App() {
                 onChange={(e) => handleFormChange('notes', e.target.value)}
               />
             </label>
+
+            {saveError && (
+              <div className="rounded border border-red-500/50 bg-red-500/10 px-3 py-2 font-mono text-[10px] text-red-200 tracking-[0.16em]">
+                {saveError}
+              </div>
+            )}
 
             <div className="mt-1 flex gap-2">
               <button

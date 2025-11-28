@@ -119,6 +119,33 @@ export async function deleteDive(id: number): Promise<void> {
   await db.dives.delete(id);
 }
 
+export type SaveDiveResult =
+  | { status: 'ok'; dive: StoredDive }
+  | { status: 'error'; error?: unknown };
+
+export async function safeAddDive(input: NewDiveInput): Promise<SaveDiveResult> {
+  try {
+    const dive = await addDive(input);
+    return { status: 'ok', dive };
+  } catch (error) {
+    console.error('Failed to add dive', error);
+    return { status: 'error', error };
+  }
+}
+
+export async function safeUpdateDive(
+  id: number,
+  changes: Partial<NewDiveInput>,
+): Promise<'ok' | 'error'> {
+  try {
+    await updateDive(id, changes);
+    return 'ok';
+  } catch (error) {
+    console.error('Failed to update dive', error);
+    return 'error';
+  }
+}
+
 // ---------------------------------------------------------------------
 // Profile
 // ---------------------------------------------------------------------

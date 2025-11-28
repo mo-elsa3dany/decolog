@@ -1,13 +1,9 @@
-const missingEnvMessage = (key: string) => `Missing environment variable: ${key}`;
-
-function requireEnv(value: string | undefined, key: string): string {
+function readEnv(value: string | undefined, key: string): string | undefined {
   if (value) return value;
-  const message = missingEnvMessage(key);
   if (import.meta.env.DEV) {
-    // Surface configuration issues early during local development.
-    console.error(message);
+    console.warn(`Missing environment variable: ${key}`);
   }
-  throw new Error(message);
+  return undefined;
 }
 
 const resolvedAppBaseUrl = import.meta.env.APP_BASE_URL ?? import.meta.env.VITE_APP_BASE_URL;
@@ -19,19 +15,16 @@ if (import.meta.env.DEV && !resolvedAppBaseUrl) {
 const fallbackAppBaseUrl =
   resolvedAppBaseUrl ?? (typeof window !== 'undefined' ? window.location.origin : undefined);
 
-export const stripePublishableKey = requireEnv(
+export const stripePublishableKey = readEnv(
   import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY,
   'VITE_STRIPE_PUBLISHABLE_KEY',
 );
 
-export const stripePricePro = requireEnv(
-  import.meta.env.VITE_STRIPE_PRICE_PRO,
-  'VITE_STRIPE_PRICE_PRO',
-);
+export const stripePricePro = readEnv(import.meta.env.VITE_STRIPE_PRICE_PRO, 'VITE_STRIPE_PRICE_PRO');
 
-export const stripePriceCloud = requireEnv(
+export const stripePriceCloud = readEnv(
   import.meta.env.VITE_STRIPE_PRICE_CLOUD,
   'VITE_STRIPE_PRICE_CLOUD',
 );
 
-export const appBaseUrl = requireEnv(fallbackAppBaseUrl, 'APP_BASE_URL');
+export const appBaseUrl = readEnv(fallbackAppBaseUrl, 'APP_BASE_URL');

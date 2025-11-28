@@ -1,32 +1,29 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import Stripe from 'stripe';
 
-type CheckoutMode = 'pro' | 'cloud';
+function allowedPrices(): string[] {
+  return [
+    process.env.STRIPE_PRICE_MONTHLY,
+    process.env.STRIPE_PRICE_YEARLY,
+    process.env.STRIPE_PRICE_PRO,
+    process.env.STRIPE_PRICE_CLOUD,
+    process.env.VITE_STRIPE_PRICE_PRO,
+    process.env.VITE_STRIPE_PRICE_CLOUD,
+  ].filter((id): id is string => Boolean(id));
+}
 
-const stripeConfig = {
-  secretKey: process.env.STRIPE_SECRET_KEY,
-  webhookSecret: process.env.STRIPE_WEBHOOK_SECRET, // reserved for future webhook verification
-  pricePro: process.env.VITE_STRIPE_PRICE_PRO ?? process.env.STRIPE_PRICE_PRO,
-  priceCloud: process.env.VITE_STRIPE_PRICE_CLOUD ?? process.env.STRIPE_PRICE_CLOUD,
-  appBaseUrl: process.env.APP_BASE_URL,
-};
-
-function validateConfig() {
-  const missing: string[] = [];
-  if (!stripeConfig.secretKey) missing.push('STRIPE_SECRET_KEY');
-  if (!stripeConfig.pricePro) missing.push('VITE_STRIPE_PRICE_PRO');
-  if (!stripeConfig.priceCloud) missing.push('VITE_STRIPE_PRICE_CLOUD');
-  if (!stripeConfig.appBaseUrl) missing.push('APP_BASE_URL');
-
-  if (missing.length) {
-    console.error(`Stripe server config missing: ${missing.join(', ')}`);
+function parseJsonBody(req: VercelRequest): Record<string, unknown> {
+  if (typeof req.body === 'string') {
+    try {
+      return JSON.parse(req.body) as Record<string, unknown>;
+    } catch {
+      return {};
+    }
   }
-
-  if (process.env.NODE_ENV !== 'production' && !stripeConfig.webhookSecret) {
-    console.warn('STRIPE_WEBHOOK_SECRET not set; webhook handling is disabled.');
+  if (typeof req.body === 'object' && req.body != null) {
+    return req.body as Record<string, unknown>;
   }
-
-  return missing;
+  return {};
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -35,60 +32,56 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const missing = validateConfig();
-  if (missing.length) {
+  const secretKey = process.env.STRIPE_SECRET_KEY;
+  const appUrl = process.env.APP_URL ?? process.env.APP_BASE_URL;
+  const priceList = allowedPrices();
+
+  if (!secretKey || !appUrl || !priceList.length) {
+    console.warn('Stripe server config missing required keys or price IDs');
     return res.status(500).json({ error: 'Server Stripe configuration is missing.' });
   }
 
-  const stripe = new Stripe(stripeConfig.secretKey as string, {
+  const body = parseJsonBody(req);
+  const priceId = typeof body.priceId === 'string' ? body.priceId : null;
+  const deviceId = typeof body.deviceId === 'string' ? body.deviceId.trim() : '';
+
+  if (!priceId || !priceList.includes(priceId)) {
+    return res.status(400).json({ error: 'Invalid price' });
+  }
+
+  if (!deviceId) {
+    return res.status(400).json({ error: 'Missing device id' });
+  }
+
+  const stripe = new Stripe(secretKey, {
     apiVersion: '2024-06-20',
   });
 
-  let parsedBody: unknown = req.body ?? {};
-  if (typeof req.body === 'string') {
-    try {
-      parsedBody = JSON.parse(req.body);
-    } catch {
-      return res.status(400).json({ error: 'Invalid JSON body' });
-    }
-  }
-
-  const mode = (parsedBody as { mode?: CheckoutMode }).mode;
-
-  if (mode !== 'pro' && mode !== 'cloud') {
-    return res.status(400).json({ error: 'Invalid checkout mode' });
-  }
-
-  const priceId = (mode === 'pro' ? stripeConfig.pricePro : stripeConfig.priceCloud) as string;
-  const appBaseUrl = stripeConfig.appBaseUrl as string;
-  const checkoutMode: Stripe.Checkout.SessionCreateParams.Mode =
-    mode === 'pro' ? 'payment' : 'subscription';
-
   try {
-    const session = await stripe.checkout.sessions.create({
-      mode: checkoutMode,
-      line_items: [
-        {
-          price: priceId,
-          quantity: 1,
+    const session = await stripe.checkout.sessions.create(
+      {
+        mode: 'subscription',
+        line_items: [
+          {
+            price: priceId,
+            quantity: 1,
+          },
+        ],
+        success_url: `${appUrl}/?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${appUrl}/?checkout=cancel`,
+        metadata: { deviceId },
+        subscription_data: {
+          metadata: { deviceId },
         },
-      ],
-      success_url: `${appBaseUrl}/?checkout=success&mode=${mode}&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${appBaseUrl}/?checkout=cancel`,
-      metadata: { license_mode: mode },
-      subscription_data:
-        mode === 'cloud'
-          ? {
-              metadata: { license_mode: mode },
-            }
-          : undefined,
-    });
+      },
+      { idempotencyKey: `checkout_${deviceId}_${priceId}` },
+    );
 
-    if (!session.url) {
+    if (!session.url || !session.id) {
       throw new Error('Stripe did not return a checkout URL.');
     }
 
-    return res.status(200).json({ url: session.url });
+    return res.status(200).json({ id: session.id, url: session.url });
   } catch (error) {
     console.error('Failed to create Stripe Checkout session', error);
     const message = error instanceof Error ? error.message : 'Unknown Stripe error';
