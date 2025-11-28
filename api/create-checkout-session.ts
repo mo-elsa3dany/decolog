@@ -10,7 +10,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const secretKey = process.env.STRIPE_SECRET_KEY;
   const appUrl = process.env.APP_URL ?? process.env.APP_BASE_URL;
-  const priceList = allowedPrices();
+
+  // PRO = one-time
+  const proPrice = process.env.VITE_STRIPE_PRICE_PRO;
+
+  // CLOUD = subscription
+  const cloudPrice = process.env.VITE_STRIPE_PRICE_CLOUD;
+
+  const priceList = allowedPrices(); // must include both
 
   if (!secretKey || !appUrl || !priceList.length) {
     console.warn('Stripe server config missing required keys or price IDs');
@@ -33,22 +40,51 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     apiVersion: process.env.STRIPE_API_VERSION as Stripe.StripeConfig['apiVersion'],
   });
 
+  // Decide checkout mode
+  const isCloudSubscription = cloudPrice && priceId === cloudPrice;
+  const isProOneTime = proPrice && priceId === proPrice;
+
+  if (!isCloudSubscription && !isProOneTime) {
+    console.error('Price does not match PRO or CLOUD');
+    return res.status(400).json({ error: 'Unsupported price ID' });
+  }
+
   try {
     const session = await stripe.checkout.sessions.create(
-      {
-        mode: 'payment',                 // <-- FIXED: one-time purchase
-        payment_method_types: ['card'],
-        line_items: [
-          {
-            price: priceId,
-            quantity: 1,
+      isCloudSubscription
+        ? {
+            // CLOUD subscription
+            mode: 'subscription',
+            line_items: [
+              {
+                price: priceId,
+                quantity: 1,
+              },
+            ],
+            success_url: `${appUrl}/?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${appUrl}/?checkout=cancel`,
+            metadata: { deviceId },
+            subscription_data: {
+              metadata: { deviceId },
+            },
+          }
+        : {
+            // PRO one-time purchase
+            mode: 'payment',
+            payment_method_types: ['card'],
+            line_items: [
+              {
+                price: priceId,
+                quantity: 1,
+              },
+            ],
+            success_url: `${appUrl}/?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${appUrl}/?checkout=cancel`,
+            metadata: { deviceId },
           },
-        ],
-        success_url: `${appUrl}/?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${appUrl}/?checkout=cancel`,
-        metadata: { deviceId },
+      {
+        idempotencyKey: `checkout_${deviceId}_${priceId}`,
       },
-      { idempotencyKey: `checkout_${deviceId}_${priceId}` },
     );
 
     if (!session.url || !session.id) {
