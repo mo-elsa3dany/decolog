@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getLicense } from './licenseStore';
+import { getLicense } from './licenseStore.js';
 
 function extractDeviceId(req: VercelRequest): string | null {
   if (req.query.deviceId && typeof req.query.deviceId === 'string') {

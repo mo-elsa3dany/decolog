@@ -54,7 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const stripe = new Stripe(secretKey, {
-    apiVersion: '2024-06-20',
+    apiVersion: process.env.STRIPE_API_VERSION as Stripe.StripeConfig['apiVersion'],
   });
 
   try {

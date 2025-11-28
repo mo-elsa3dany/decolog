@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import Stripe from 'stripe';
-import { upsertLicense } from './licenseStore';
+import { upsertLicense } from './licenseStore.js';
 
 async function getRawBody(req: VercelRequest): Promise<Buffer> {
   if (typeof req.body === 'string') {
@@ -31,7 +31,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: 'Stripe webhook not configured' });
   }
 
-  const stripe = new Stripe(secretKey, { apiVersion: '2024-06-20' });
+  const stripe = new Stripe(secretKey, {
+    apiVersion: process.env.STRIPE_API_VERSION as Stripe.StripeConfig['apiVersion'],
+  });
   const signature = req.headers['stripe-signature'];
 
   if (!signature || Array.isArray(signature)) {
